@@ -1,8 +1,8 @@
 # dbus-tasmota-pv
 
-[![CI](https://github.com/4alvit/dbus-tasmota-pv/actions/workflows/ci.yml/badge.svg)](https://github.com/4alvit/dbus-tasmota-pv/actions/workflows/ci.yml)
+[![CI](https://github.com/victron-venus/dbus-tasmota-pv/actions/workflows/ci.yml/badge.svg)](https://github.com/victron-venus/dbus-tasmota-pv/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
-[![Release](https://img.shields.io/github/v/release/4alvit/dbus-tasmota-pv)](https://github.com/4alvit/dbus-tasmota-pv/releases)
+[![Release](https://img.shields.io/github/v/release/victron-venus/dbus-tasmota-pv)](https://github.com/victron-venus/dbus-tasmota-pv/releases)
 
 Venus OS driver for Tasmota smart plugs monitoring inline PV inverters.
 
