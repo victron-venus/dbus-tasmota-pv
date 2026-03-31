@@ -28,17 +28,24 @@ This script polls Tasmota smart plugs via HTTP and publishes power data to D-Bus
 
 ## Configuration
 
-Edit `dbus-tasmota-pv.py` to configure your Tasmota plug IP addresses:
+Configure devices via command line arguments:
 
-```python
-# Line ~86-87 in dbus-tasmota-pv.py
-inv1 = TasmotaPVInverter('192.168.164.73', 120)  # First plug, instance 120
-inv2 = TasmotaPVInverter('192.168.164.74', 121)  # Second plug, instance 121
+```bash
+# Format: IP:INSTANCE
+./dbus-tasmota-pv.py --devices 192.168.1.100:120 192.168.1.101:121
+```
+
+Or edit the service run script `/service/dbus-tasmota-pv/run`:
+
+```bash
+#!/bin/sh
+cd /data/dbus-tasmota-pv
+exec python3 dbus-tasmota-pv.py --devices 192.168.164.73:120 192.168.164.74:121
 ```
 
 Parameters:
-- First argument: Tasmota plug IP address
-- Second argument: D-Bus device instance (unique number, 120-199 recommended)
+- IP address: Tasmota plug IP
+- Instance: D-Bus device instance (unique number, 120-199 recommended)
 
 ## Requirements
 
@@ -56,7 +63,7 @@ cd dbus-tasmota-pv
 
 # Edit dbus-tasmota-pv.py with your Tasmota IPs
 
-# Deploy to Venus OS (assumes SSH host 'r' in ~/.ssh/config)
+# Deploy to Venus OS (assumes SSH host 'Cerbo' in ~/.ssh/config)
 ./deploy.sh
 ```
 
@@ -124,11 +131,15 @@ curl 'http://192.168.164.73/cm?cmnd=Status%208'
 ```
 
 ### Service doesn't survive reboot
-```bash
-# Check rc.local
-cat /data/rc.local
 
-# Re-run installer
+Venus OS uses daemontools for service management. Services in `/service/` start automatically on boot.
+
+```bash
+# Verify service symlink exists
+ls -la /service/dbus-tasmota-pv
+
+# Should point to /opt/victronenergy/service/dbus-tasmota-pv
+# If missing, re-run installer:
 cd /data/dbus-tasmota-pv
 ./install.sh
 ```
