@@ -4,24 +4,35 @@
 
 | Version | Supported          |
 | ------- | ------------------ |
-| 1.x.x   | :white_check_mark: |
+| 1.2.x   | :white_check_mark: |
+| < 1.2   | :x:                |
 
 ## Reporting a Vulnerability
 
-If you discover a security vulnerability, please report it by opening a GitHub issue or contacting the maintainer directly.
+If you discover a security vulnerability, please:
 
-**Please include:**
-- Description of the vulnerability
-- Steps to reproduce
-- Potential impact
-- Suggested fix (if any)
-
-We will respond as quickly as possible and work to address the issue.
+1. **Do NOT** open a public issue
+2. Email the maintainers directly or use GitHub's private vulnerability reporting
+3. Include:
+   - Description of the vulnerability
+   - Steps to reproduce
+   - Potential impact
+   - Suggested fix (if any)
 
 ## Security Considerations
 
-This software polls Tasmota devices via HTTP:
+This project runs on Venus OS with access to:
 
-- Keep Tasmota firmware updated
-- Use network segmentation for IoT devices
-- Keep your Venus OS updated
+- Tasmota devices via HTTP
+- D-Bus (Victron system)
+
+### Recommendations
+
+1. **Tasmota**: Enable web authentication on Tasmota devices
+2. **Network**: Run on a trusted local network
+3. **Firewall**: Restrict access to Tasmota devices
+
+## Known Limitations
+
+- HTTP polling without authentication by default
+- Designed for trusted home networks only
