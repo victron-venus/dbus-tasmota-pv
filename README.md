@@ -73,7 +73,27 @@ Parameters:
 
 ## Installation
 
-### From local machine (recommended)
+### Option 1: SetupHelper (Recommended)
+
+The easiest way to install is via [SetupHelper](https://github.com/kwindrem/SetupHelper) PackageManager:
+
+1. **Install SetupHelper** (if not already installed):
+   ```bash
+   wget -qO - https://github.com/kwindrem/SetupHelper/archive/latest.tar.gz | tar -xzf - -C /data
+   mv /data/SetupHelper-latest /data/SetupHelper
+   /data/SetupHelper/setup
+   ```
+
+2. **Add package via GUI**:
+   - Settings → PackageManager → Inactive packages → **new**
+   - Package name: `dbus-tasmota-pv`
+   - GitHub user: `victron-venus`
+   - Branch/tag: `latest`
+   - Proceed → Download → Install
+
+3. **Done!** The package will automatically reinstall after Venus OS updates.
+
+### Option 2: Manual Install
 
 ```bash
 # Clone repository

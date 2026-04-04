@@ -1,11 +1,8 @@
 #!/bin/sh
 exec 2>&1
 
-# Configuration - read from setupOptions or use defaults
-MQTT_BROKER="localhost"
+MQTT_BROKER="127.0.0.1"
 MQTT_TOPIC="tele/tasmota_pv/SENSOR"
-[ -f /data/setupOptions/dbus-tasmota-pv/mqttBroker ] && MQTT_BROKER=$(cat /data/setupOptions/dbus-tasmota-pv/mqttBroker)
-[ -f /data/setupOptions/dbus-tasmota-pv/mqttTopic ] && MQTT_TOPIC=$(cat /data/setupOptions/dbus-tasmota-pv/mqttTopic)
 
 cd /data/dbus-tasmota-pv
 exec python3 dbus-tasmota-pv.py \
