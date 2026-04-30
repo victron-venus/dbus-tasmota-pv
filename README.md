@@ -211,3 +211,21 @@ This project is part of a Victron Venus OS integration suite:
 ## License
 
 MIT License
+
+## Contributing
+
+1. Fork the repository
+2. Create a feature branch (`git checkout -b feature-name`)
+3. Commit your changes
+4. Push to the branch (`git push origin feature-name`)
+5. Create a Pull Request
+
+## Support
+
+For issues specific to:
+- **Tasmota devices**: Check device is on same network and HTTP API accessible
+- **D-Bus integration**: Verify D-Bus service registration
+- **Power readings**: Ensure energy monitoring enabled in Tasmota
+- **This project**: Open an issue in this repository
+
+**Note:** This is a community project and is not affiliated with Victron Energy.
