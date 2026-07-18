@@ -48,7 +48,7 @@ logger = logging.getLogger("TasmotaPV")
 
 class TasmotaPVInverter:
     """Single Tasmota device as PV Inverter on D-Bus"""
-    
+
     def __init__(self, ip_address: str, instance: int, session: requests.Session):
         self.ip = ip_address
         self.instance = instance
@@ -56,13 +56,13 @@ class TasmotaPVInverter:
         self._consecutive_failures = 0
         self._last_success = time()
         self._connected = True
-        
+
         # Create a private bus connection for each instance to avoid path conflicts
         self.bus = dbus.SystemBus(private=True)
-        
+
         service_name = f'com.victronenergy.pvinverter.tasmota_{instance}'
         self._dbusservice = VeDbusService(service_name, bus=self.bus, register=False)
-        
+
         # Mandatory management paths
         self._dbusservice.add_path('/Mgmt/ProcessName', 'dbus-tasmota-pv.py')
         self._dbusservice.add_path('/Mgmt/ProcessVersion', VERSION)
@@ -72,10 +72,10 @@ class TasmotaPVInverter:
         self._dbusservice.add_path('/ProductId', 0xA144)  # Standard PV Inverter ID
         self._dbusservice.add_path('/ErrorCode', 0)
         self._dbusservice.add_path('/FirmwareVersion', VERSION)
-        
+
         # Position: 0 = AC Input (Grid side), 1 = AC Output (Load side)
         self._dbusservice.add_path('/Position', 0)
-        
+
         # AC Power Paths
         self._dbusservice.add_path('/Ac/Power', 0.0)
         self._dbusservice.add_path('/Ac/L1/Power', 0.0)
@@ -95,23 +95,23 @@ class TasmotaPVInverter:
             )
             response.raise_for_status()
             data = response.json()
-            
+
             energy = data['StatusSNS']['ENERGY']
             power = float(energy.get('Power', 0.0))
             voltage = float(energy.get('Voltage', 115.0))
             total = float(energy.get('Total', 0.0))
             current = round(power / voltage, 2) if voltage > 0 else 0.0
-            
+
             # Reset failure counter on success
             self._consecutive_failures = 0
             self._last_success = time()
-            
+
             if not self._connected:
                 self._connected = True
                 logger.info(f"Tasmota {self.ip} reconnected")
-            
+
             return power, voltage, current, total
-            
+
         except requests.exceptions.Timeout:
             self._handle_failure("timeout")
             return None
@@ -121,11 +121,11 @@ class TasmotaPVInverter:
         except Exception as e:
             self._handle_failure(str(e))
             return None
-    
+
     def _handle_failure(self, reason: str):
         """Handle connection failure with backoff"""
         self._consecutive_failures += 1
-        
+
         if self._consecutive_failures == 1:
             logger.warning(f"Tasmota {self.ip}: {reason}")
         elif self._consecutive_failures == MAX_CONSECUTIVE_FAILURES:
@@ -152,7 +152,7 @@ class TasmotaPVInverter:
             return
 
         power, voltage, current, total = result
-        
+
         self._dbusservice['/Connected'] = 1
         self._dbusservice['/ErrorCode'] = 0
         self._dbusservice['/Ac/Power'] = power
@@ -179,9 +179,9 @@ Examples:
         help='Device specifications as IP:INSTANCE (e.g., 192.168.1.100:120)'
     )
     args = parser.parse_args()
-    
+
     logger.info(f"=== dbus-tasmota-pv v{VERSION} ===")
-    
+
     # Parse device specifications
     devices = []
     for spec in args.devices:
@@ -193,24 +193,24 @@ Examples:
         except ValueError:
             logger.error(f"Invalid device specification: {spec} (expected IP:INSTANCE)")
             sys.exit(1)
-    
+
     if not devices:
         logger.error("No devices configured")
         sys.exit(1)
-    
+
     # Setup D-Bus main loop
     DBusGMainLoop(set_as_default=True)
     mainloop = GLib.MainLoop()
-    
+
     def graceful_shutdown(signum, frame):
         """Handle shutdown signals gracefully"""
         sig_name = signal.Signals(signum).name if hasattr(signal, 'Signals') else str(signum)
         logger.info(f"Received {sig_name}, shutting down gracefully...")
         mainloop.quit()
-    
+
     signal.signal(signal.SIGTERM, graceful_shutdown)
     signal.signal(signal.SIGINT, graceful_shutdown)
-    
+
     # Create shared HTTP session with connection pooling
     session = requests.Session()
     adapter = HTTPAdapter(
@@ -219,7 +219,7 @@ Examples:
         max_retries=0  # We handle retries ourselves
     )
     session.mount('http://', adapter)
-    
+
     # Create inverter instances
     inverters = []
     for ip, instance in devices:
@@ -228,39 +228,39 @@ Examples:
             inverters.append(inv)
         except Exception as e:
             logger.error(f"Failed to create inverter for {ip}: {e}")
-    
+
     if not inverters:
         logger.error("No inverters could be created")
         session.close()
         sys.exit(1)
-    
+
     # Periodic garbage collection counter
     gc_counter = 0
     GC_INTERVAL = 150  # Run GC every 150 polls (~5 minutes)
-    
+
     def poll():
         """Periodic update with memory management"""
         nonlocal gc_counter
-        
+
         for inv in inverters:
             try:
                 inv.update()
             except Exception as e:
                 logger.error(f"Error updating {inv.ip}: {e}")
-        
+
         # Periodic garbage collection
         gc_counter += 1
         if gc_counter >= GC_INTERVAL:
             gc_counter = 0
             gc.collect()
-        
+
         return True
-    
+
     # Start polling
     GLib.timeout_add(POLL_INTERVAL_MS, poll)
-    
+
     logger.info(f"Service started with {len(inverters)} inverter(s), entering main loop")
-    
+
     try:
         mainloop.run()
     except KeyboardInterrupt:

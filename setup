@@ -17,11 +17,11 @@ fi
 #### install
 if [ "$scriptAction" == 'INSTALL' ]; then
     logMessage "Installing $packageName"
-    
+
     # Create directories
     mkdir -p /data/dbus-tasmota-pv
     mkdir -p /var/log/dbus-tasmota-pv
-    
+
     # Install Python script
     cp "$scriptDir/dbus-tasmota-pv.py" /data/dbus-tasmota-pv/
     chmod +x /data/dbus-tasmota-pv/*.py
@@ -30,7 +30,7 @@ fi
 #### uninstall
 if [ "$scriptAction" == 'UNINSTALL' ]; then
     logMessage "Uninstalling $packageName"
-    
+
     # Remove Python scripts
     rm -rf /data/dbus-tasmota-pv
 fi
