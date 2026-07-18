@@ -93,6 +93,27 @@ The easiest way to install is via [SetupHelper](https://github.com/kwindrem/Setu
 
 3. **Done!** The package will automatically reinstall after Venus OS updates.
 
+### How PackageManager Works
+
+PackageManager discovers packages by scanning `/data/` for directories containing both a `version` file and a `setup` script. The `setup` script (sourced from this repo) is executed with the `INSTALL` action by SetupHelper, which:
+
+- Creates the daemontools service under `/service/dbus-tasmota-pv/`
+- Copies the Python script to `/data/dbus-tasmota-pv/`
+
+The `gitHubInfo` file tells PackageManager where to download from:
+```
+victron-venus:latest
+```
+
+### Uninstall
+
+Via PackageManager: Settings → PackageManager → dbus-tasmota-pv → Uninstall
+
+Via CLI:
+```bash
+ssh Cerbo '/data/dbus-tasmota-pv/setup uninstall'
+```
+
 ### Option 2: Manual Install
 
 ```bash
@@ -149,6 +170,37 @@ tail -f /var/log/dbus-tasmota-pv/current | tai64nlocal
 You should see JSON with ENERGY data including Power, Voltage, Current, Total.
 
 ## Troubleshooting
+
+### Package not showing in PackageManager
+
+PackageManager's `AddStoredPackages()` requires both a `version` file AND a `setup` script in `/data/dbus-tasmota-pv/`.
+
+**Check**:
+```bash
+ls -la /data/dbus-tasmota-pv/version /data/dbus-tasmota-pv/setup
+cat /data/dbus-tasmota-pv/gitHubInfo   # should show: victron-venus:latest
+```
+
+**Common issues**:
+- `setup` file missing → PackageManager skips the directory silently
+- `version` file missing or empty → PackageManager skips
+- `gitHubInfo` missing → can't download updates
+
+**Fix**:
+```bash
+# Copy missing files
+scp setup gitHubInfo version root@cerbo:/data/dbus-tasmota-pv/
+ssh root@cerbo "chmod +x /data/dbus-tasmota-pv/setup"
+
+# Restart PackageManager to re-scan
+svc -t /service/PackageManager
+```
+
+**Verify**:
+```bash
+tail -20 /var/log/PackageManager/current | grep dbus-tasmota-pv
+# Should show: checking dbus-tasmota-pv / adding dbus-tasmota-pv
+```
 
 ### Service not starting
 ```bash
