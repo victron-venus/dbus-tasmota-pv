@@ -15,7 +15,6 @@ Usage:
 Where each device is specified as IP:INSTANCE
 """
 
-import os
 import sys
 import argparse
 import logging
@@ -33,10 +32,11 @@ from gi.repository import GLib
 sys.path.append('/opt/victronenergy/dbus-systemcalc-py/ext/velib_python')
 from vedbus import VeDbusService
 
-VERSION = "1.2.0"
+VERSION = "1.3.0"
 POLL_INTERVAL_MS = 2000
-HTTP_TIMEOUT = (2, 3)  # (connect_timeout, read_timeout)
+HTTP_TIMEOUT = (3.0, 5.0)  # (connect_timeout, read_timeout)
 MAX_CONSECUTIVE_FAILURES = 5
+ZERO_POWER_FALLBACK = True  # Report 0 power when offline
 
 # Logging setup
 logging.basicConfig(
@@ -138,13 +138,19 @@ class TasmotaPVInverter:
     def update(self):
         """Update D-Bus values from Tasmota data"""
         result = self._get_tasmota_data()
-        
+
         if result is None:
-            # Keep last values but update connected status
-            self._dbusservice['/Connected'] = 1 if self._connected else 0
-            self._dbusservice['/ErrorCode'] = 0 if self._connected else 1
+            # Stale data: report via ErrorCode, fallback to zero power
+            if self._consecutive_failures >= MAX_CONSECUTIVE_FAILURES:
+                self._dbusservice['/ErrorCode'] = 1  # Offline/comm error
+                self._dbusservice['/Connected'] = 0
+                self._dbusservice['/Ac/Power'] = 0.0
+                self._dbusservice['/Ac/L1/Power'] = 0.0
+            else:
+                self._dbusservice['/ErrorCode'] = 0
+                self._dbusservice['/Connected'] = 1
             return
-        
+
         power, voltage, current, total = result
         
         self._dbusservice['/Connected'] = 1
