@@ -29,12 +29,12 @@ Venus OS driver for Tasmota smart plugs monitoring inline PV inverters.
 This script polls Tasmota smart plugs via HTTP and publishes power data to D-Bus as PV inverters. This allows Victron GX devices to see and display solar production from simple inline MPPT inverters that don't have native Victron integration.
 
 ```mermaid
-flowchart LR
+flowchart TB
     SP[Solar Panel] --> MPPT[Inline MPPT Inverter]
     MPPT --> TP[Tasmota Smart Plug]
     TP --> GRID[AC Grid]
-    TP -->|HTTP polling| SCRIPT[dbus-tasmota-pv on Cerbo GX]
-    SCRIPT -->|D-Bus| GUI[Victron GUI / VRM]
+    TP --> SCRIPT[dbus-tasmota-pv on Cerbo GX<br/>via HTTP polling]
+    SCRIPT --> GUI[Victron GUI / VRM<br/>via D-Bus]
 ```
 
 ## Features
