@@ -104,8 +104,8 @@ class TasmotaPVInverter:
         try:
             # Tasmota devices have no HTTPS support. Traffic stays on LAN = trusted.
             response = self._session.get(
-                f"http://{self.ip}/cm?cmnd=Status%208",
-                timeout=HTTP_TIMEOUT,  # nosonar
+                f"http://{self.ip}/cm?cmnd=Status%208",  # nosonar
+                timeout=HTTP_TIMEOUT,
             )
             response.raise_for_status()
             data = response.json()
