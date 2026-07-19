@@ -78,8 +78,8 @@ class TestLoadConfig:
             yaml.dump(
                 {
                     "devices": [
-                        {"ip": "192.168.1.100", "instance": 120},
-                        {"ip": "192.168.1.101", "instance": 121},
+                        {"ip": "192.168.1.100", "instance": 120},  # noqa: S104
+                        {"ip": "192.168.1.101", "instance": 121},  # noqa: S104
                     ]
                 }
             )
@@ -103,17 +103,17 @@ class TestLoadConfig:
 
     def test_device_missing_instance(self, tmp_path: Path) -> None:
         cfg = tmp_path / "cfg.yaml"
-        cfg.write_text(yaml.dump({"devices": [{"ip": "1.2.3.4"}]}))
+        cfg.write_text(yaml.dump({"devices": [{"ip": "1.2.3.4"}]}))  # noqa: S104
         assert load_config(cfg) == []
 
     def test_instance_zero_accepted(self, tmp_path: Path) -> None:
         cfg = tmp_path / "cfg.yaml"
-        cfg.write_text(yaml.dump({"devices": [{"ip": "1.2.3.4", "instance": 0}]}))
+        cfg.write_text(yaml.dump({"devices": [{"ip": "1.2.3.4", "instance": 0}]}))  # noqa: S104
         assert load_config(cfg) == [("1.2.3.4", 0)]
 
     def test_non_integer_instance_raises(self, tmp_path: Path) -> None:
         cfg = tmp_path / "cfg.yaml"
-        cfg.write_text(yaml.dump({"devices": [{"ip": "1.2.3.4", "instance": "abc"}]}))
+        cfg.write_text(yaml.dump({"devices": [{"ip": "1.2.3.4", "instance": "abc"}]}))  # noqa: S104
         with pytest.raises(ValueError):
             load_config(cfg)
 

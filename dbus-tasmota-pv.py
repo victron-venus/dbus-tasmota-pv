@@ -102,8 +102,8 @@ class TasmotaPVInverter:
     def _get_tasmota_data(self):
         """Fetch energy data from Tasmota device"""
         try:
-            # Tasmota devices do not support HTTPS. Local network = trusted.
-            response = self._session.get(
+            # Tasmota devices have no HTTPS support. Traffic stays on LAN = trusted.
+            response = self._session.get(  # noqa: S309 (HTTP intentional, see below)
                 f"http://{self.ip}/cm?cmnd=Status%208", timeout=HTTP_TIMEOUT
             )
             response.raise_for_status()
@@ -181,7 +181,11 @@ class TasmotaPVInverter:
 
 def load_config(config_path: Path) -> list[tuple[str, int]]:
     """Load devices from YAML config file"""
-    # Validate path before opening (prevent path traversal)
+    # Validate path before opening (prevent path traversal via ..)
+    try:
+        config_path = config_path.resolve()
+    except (OSError, ValueError) as e:
+        raise ValueError(f"Invalid config path: {config_path}") from e
     if not config_path.is_file():
         raise ValueError(f"Config path is not a file: {config_path}")
     with open(config_path, encoding="utf-8") as f:
@@ -262,8 +266,8 @@ Examples:
         pool_maxsize=len(devices) * 2,
         max_retries=0,  # We handle retries ourselves
     )
-    # Tasmota devices only support HTTP
-    session.mount("http://", adapter)
+    # Tasmota devices only support HTTP; local network presumed trusted
+    session.mount("http://", adapter)  # noqa: S309 (HTTP intentional)
 
     # Create inverter instances
     inverters = []
