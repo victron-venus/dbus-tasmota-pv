@@ -103,8 +103,9 @@ class TasmotaPVInverter:
         """Fetch energy data from Tasmota device"""
         try:
             # Tasmota devices have no HTTPS support. Traffic stays on LAN = trusted.
-            response = self._session.get(  # noqa: S309 (HTTP intentional, see below)
-                f"http://{self.ip}/cm?cmnd=Status%208", timeout=HTTP_TIMEOUT
+            response = self._session.get(
+                f"http://{self.ip}/cm?cmnd=Status%208",
+                timeout=HTTP_TIMEOUT,  # noqa: S309
             )
             response.raise_for_status()
             data = response.json()
@@ -267,7 +268,7 @@ Examples:
         max_retries=0,  # We handle retries ourselves
     )
     # Tasmota devices only support HTTP; local network presumed trusted
-    session.mount("http://", adapter)  # noqa: S309 (HTTP intentional)
+    session.mount("http://", adapter)  # noqa: S309
 
     # Create inverter instances
     inverters = []
