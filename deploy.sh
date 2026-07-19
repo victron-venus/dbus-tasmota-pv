@@ -21,6 +21,12 @@ echo "=============================================="
 echo "SSH Host: $SSH_HOST"
 echo ""
 
+# Verify SSH host is reachable
+if ! ssh -o ConnectTimeout=5 -o BatchMode=yes "$SSH_HOST" "echo ok" >/dev/null 2>&1; then
+    echo "Error: Cannot connect to $SSH_HOST" >&2
+    exit 1
+fi
+
 # Create directory on remote
 echo ">>> Creating directory..."
 ssh "$SSH_HOST" "mkdir -p $REMOTE_DIR"
@@ -36,7 +42,10 @@ ssh "$SSH_HOST" "chmod +x $REMOTE_DIR/*.py $REMOTE_DIR/install.sh"
 # Run install script
 echo ""
 echo ">>> Running install script on Venus OS..."
-ssh "$SSH_HOST" "cd $REMOTE_DIR && ./install.sh"
+if ! ssh "$SSH_HOST" "cd $REMOTE_DIR && ./install.sh"; then
+    echo "Error: install script failed" >&2
+    exit 1
+fi
 
 # Show status
 echo ""

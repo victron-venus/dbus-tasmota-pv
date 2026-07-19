@@ -1,4 +1,4 @@
-#!/usr/bin/env bash
+#!/bin/bash
 # Bump version file, tag, push, GitHub release, then fetch so reruns see the new tag.
 
 set -euo pipefail
@@ -7,12 +7,12 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 NOTES_FILE="$SCRIPT_DIR/release.txt"
 
 if [ ! -f "$NOTES_FILE" ]; then
-    echo "Error: $NOTES_FILE not found — create release notes there."
+    echo "Error: $NOTES_FILE not found — create release notes there." >&2
     exit 1
 fi
 
 if [ ! -s "$NOTES_FILE" ]; then
-    echo "Error: release.txt is empty"
+    echo "Error: release.txt is empty" >&2
     exit 1
 fi
 
@@ -22,15 +22,19 @@ echo ">>> git fetch origin --tags"
 git fetch origin --tags
 
 if ! git diff-index --quiet HEAD --; then
-    echo "Error: uncommitted changes. Commit or stash first."
+    echo "Error: uncommitted changes. Commit or stash first." >&2
     exit 1
 fi
 
 BRANCH=$(git rev-parse --abbrev-ref HEAD)
-if [[ "$BRANCH" != "main" ]]; then
+if [ "$BRANCH" != "main" ]; then
     read -p "Not on main (on $BRANCH). Continue? [y/N] " -n 1 -r
     echo
-    [[ ${REPLY:-} =~ ^[Yy]$ ]] || exit 1
+    REPLY=${REPLY:-}
+    case "$REPLY" in
+        [Yy]*) ;;
+        *) exit 1 ;;
+    esac
 fi
 
 # Highest semver tag (git describe can miss a newer tag not on the direct ancestry path)
@@ -40,11 +44,11 @@ if [ -z "$LATEST_TAG" ]; then
 fi
 echo "Latest tag (after fetch): $LATEST_TAG"
 
-if [[ $LATEST_TAG =~ ^v([0-9]+)\.([0-9]+)\.([0-9]+)$ ]]; then
-    MAJOR="${BASH_REMATCH[1]}"
-    MINOR="${BASH_REMATCH[2]}"
-    PATCH="${BASH_REMATCH[3]}"
-    NEW_TAG="v$MAJOR.$MINOR.$((PATCH + 1))"
+if echo "$LATEST_TAG" | grep -qE '^v([0-9]+)\.([0-9]+)\.([0-9]+)$'; then
+    MAJOR=$(echo "$LATEST_TAG" | cut -d. -f1 | tr -d 'v')
+    MINOR=$(echo "$LATEST_TAG" | cut -d. -f2)
+    PATCH=$(echo "$LATEST_TAG" | cut -d. -f3)
+    NEW_TAG="v${MAJOR}.${MINOR}.$((PATCH + 1))"
 else
     NEW_TAG="v1.0.0"
 fi
@@ -62,7 +66,8 @@ fi
 if [ -n "$VERSION_FILE" ]; then
     OLD=$(tr -d '\r\n' < "$VERSION_FILE")
     OLD_NUM="${OLD#v}"
-    if [[ "$OLD_NUM" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] && [[ "$NEW_VER" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+    if echo "$OLD_NUM" | grep -qE '^[0-9]+\.[0-9]+\.[0-9]+$' && \
+       echo "$NEW_VER" | grep -qE '^[0-9]+\.[0-9]+\.[0-9]+$'; then
         HIGHER=$(printf '%s\n' "$NEW_VER" "$OLD_NUM" | sort -V | tail -n1)
         if [ "$HIGHER" != "$NEW_VER" ]; then
             echo ">>> $VERSION_FILE ($OLD_NUM) is ahead of tag-based bump ($NEW_VER); releasing $HIGHER instead (no downgrade)."
@@ -76,7 +81,8 @@ echo "Planned release: $NEW_TAG (semver digits: $NEW_VER)"
 
 read -p "Proceed with release $NEW_TAG? [y/N] " -n 1 -r
 echo
-if [[ ! ${REPLY:-} =~ ^[Yy]$ ]]; then
+REPLY=${REPLY:-}
+if ! echo "$REPLY" | grep -qi '^y'; then
     echo "Cancelled"
     exit 0
 fi

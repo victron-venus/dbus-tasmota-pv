@@ -17,6 +17,12 @@ echo "  dbus-tasmota-pv Installer for Venus OS"
 echo "=============================================="
 echo ""
 
+# Check for required files
+if [ ! -f "dbus-tasmota-pv.py" ] && [ ! -f "$INSTALL_DIR/dbus-tasmota-pv.py" ]; then
+    echo "Error: dbus-tasmota-pv.py not found" >&2
+    exit 1
+fi
+
 # Create install directory
 mkdir -p "$INSTALL_DIR"
 
@@ -33,13 +39,18 @@ fi
 # Remove old symlink if exists and create proper directory
 if [ -L "$SERVICE_DIR" ]; then
     echo "Removing old symlink..."
-    rm "$SERVICE_DIR"
+    rm -f "$SERVICE_DIR"
 fi
 
 # Create service directory structure
 echo ">>> Setting up daemontools service..."
 mkdir -p "$SERVICE_DIR"
 mkdir -p "$LOG_DIR"
+
+# Verify log directory is writable
+if [ ! -w "$LOG_DIR" ]; then
+    echo "Warning: Log directory $LOG_DIR is not writable" >&2
+fi
 
 # Create run script (stderr to log file, stdout to /dev/null)
 cat > "$SERVICE_DIR/run" << 'EOF'

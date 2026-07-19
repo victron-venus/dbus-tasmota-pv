@@ -200,6 +200,36 @@ def load_config(config_path: Path) -> list[tuple[str, int]]:
     return devices
 
 
+def _parse_device_spec(spec: str) -> tuple[str, int]:
+    """Parse IP:INSTANCE string into (ip, instance) tuple."""
+    ip, instance_str = spec.rsplit(":", 1)
+    return ip, int(instance_str)
+
+
+def _load_devices(args: argparse.Namespace) -> list[tuple[str, int]]:
+    """Load devices from CLI args or config file."""
+    if args.devices:
+        devices = []
+        for spec in args.devices:
+            try:
+                ip, instance = _parse_device_spec(spec)
+                devices.append((ip, instance))
+                logger.info(f"CLI device: {ip} (instance {instance})")
+            except ValueError:
+                logger.error(f"Invalid device specification: {spec} (expected IP:INSTANCE)")
+                sys.exit(1)
+        return devices
+
+    if args.config.exists():
+        devices = load_config(args.config)
+        logger.info(f"Loaded {len(devices)} device(s) from {args.config}")
+        return devices
+
+    logger.error(f"No devices specified and config file not found: {args.config}")
+    logger.info("Use --devices IP:INSTANCE or create config file at /etc/dbus-tasmota-pv.yaml")
+    sys.exit(1)
+
+
 def main():
     parser = argparse.ArgumentParser(
         description="Tasmota Energy Meter to D-Bus PV Inverter Bridge",
@@ -227,25 +257,7 @@ Examples:
 
     logger.info(f"=== dbus-tasmota-pv v{VERSION} ===")
 
-    # Load devices: CLI args override config file
-    if args.devices:
-        devices = []
-        for spec in args.devices:
-            try:
-                ip, instance = spec.rsplit(":", 1)
-                instance = int(instance)
-                devices.append((ip, instance))
-                logger.info(f"CLI device: {ip} (instance {instance})")
-            except ValueError:
-                logger.error(f"Invalid device specification: {spec} (expected IP:INSTANCE)")
-                sys.exit(1)
-    elif args.config.exists():
-        devices = load_config(args.config)
-        logger.info(f"Loaded {len(devices)} device(s) from {args.config}")
-    else:
-        logger.error(f"No devices specified and config file not found: {args.config}")
-        logger.info("Use --devices IP:INSTANCE or create config file at /etc/dbus-tasmota-pv.yaml")
-        sys.exit(1)
+    devices = _load_devices(args)
 
     # Setup D-Bus main loop
     DBusGMainLoop(set_as_default=True)

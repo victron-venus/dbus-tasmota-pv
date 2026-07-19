@@ -13,7 +13,6 @@ on:
 
 permissions:
   contents: write
-  packages: write
 
 jobs:
   build:
@@ -62,11 +61,19 @@ jobs:
       - name: Get version from tag
         id: get_version
         run: |
+          version_input=""
           if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
-            echo "VERSION=${{ inputs.tag }}" >> "$GITHUB_OUTPUT"
+            # Validate tag format for safety
+            version_input="${{ inputs.tag }}"
+            if ! echo "$version_input" | grep -qE '^[0-9]+\.[0-9]+\.[0-9]+$'; then
+              echo "Invalid tag format: $version_input" >&2
+              exit 1
+            fi
+            version_input="v$version_input"
           else
-            echo "VERSION=${GITHUB_REF#refs/tags/}" >> "$GITHUB_OUTPUT"
+            version_input="${GITHUB_REF#refs/tags/}"
           fi
+          echo "VERSION=$version_input" >> "$GITHUB_OUTPUT"
 
       - name: Build binary
         env:

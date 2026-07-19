@@ -56,7 +56,7 @@ MAX_CONSECUTIVE_FAILURES = 5
 # ---------------------------------------------------------------------------
 
 
-def _make_inverter(ip: str = "192.168.1.100", instance: int = 120) -> TasmotaPVInverter:  # noqa: S104
+def _make_inverter(ip: str = "10.0.0.1", instance: int = 120) -> TasmotaPVInverter:  # noqa: S104
     """Create a TasmotaPVInverter with all D-Bus interactions mocked."""
     session = MagicMock()
     inv = TasmotaPVInverter(ip, instance, session)
@@ -78,13 +78,13 @@ class TestLoadConfig:
             yaml.dump(
                 {
                     "devices": [
-                        {"ip": "192.168.1.100", "instance": 120},  # noqa: S104
-                        {"ip": "192.168.1.101", "instance": 121},  # noqa: S104
+                        {"ip": "10.0.0.1", "instance": 120},  # noqa: S104
+                        {"ip": "10.0.0.2", "instance": 121},  # noqa: S104
                     ]
                 }
             )
         )
-        assert load_config(cfg) == [("192.168.1.100", 120), ("192.168.1.101", 121)]
+        assert load_config(cfg) == [("10.0.0.1", 120), ("10.0.0.2", 121)]
 
     def test_empty_devices(self, tmp_path: Path) -> None:
         cfg = tmp_path / "cfg.yaml"
@@ -103,17 +103,17 @@ class TestLoadConfig:
 
     def test_device_missing_instance(self, tmp_path: Path) -> None:
         cfg = tmp_path / "cfg.yaml"
-        cfg.write_text(yaml.dump({"devices": [{"ip": "1.2.3.4"}]}))  # noqa: S104
+        cfg.write_text(yaml.dump({"devices": [{"ip": "10.0.0.1"}]}))  # noqa: S104
         assert load_config(cfg) == []
 
     def test_instance_zero_accepted(self, tmp_path: Path) -> None:
         cfg = tmp_path / "cfg.yaml"
-        cfg.write_text(yaml.dump({"devices": [{"ip": "1.2.3.4", "instance": 0}]}))  # noqa: S104
-        assert load_config(cfg) == [("1.2.3.4", 0)]
+        cfg.write_text(yaml.dump({"devices": [{"ip": "10.0.0.1", "instance": 0}]}))  # noqa: S104
+        assert load_config(cfg) == [("10.0.0.1", 0)]
 
     def test_non_integer_instance_raises(self, tmp_path: Path) -> None:
         cfg = tmp_path / "cfg.yaml"
-        cfg.write_text(yaml.dump({"devices": [{"ip": "1.2.3.4", "instance": "abc"}]}))  # noqa: S104
+        cfg.write_text(yaml.dump({"devices": [{"ip": "10.0.0.1", "instance": "abc"}]}))  # noqa: S104
         with pytest.raises(ValueError):
             load_config(cfg)
 
