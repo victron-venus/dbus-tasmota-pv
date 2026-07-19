@@ -268,6 +268,9 @@ Examples:
         session.close()
         sys.exit(1)
 
+    # Heartbeat file for watchdog
+    heartbeat_file = "/run/dbus-tasmota-pv.alive"
+
     # Periodic garbage collection counter
     gc_counter = 0
     GC_INTERVAL = 150  # Run GC every 150 polls (~5 minutes)
@@ -280,13 +283,20 @@ Examples:
             try:
                 inv.update()
             except Exception as e:
-                logger.error(f"Error updating {inv.ip}: {e}")
+                logger.error("Error updating %s: %s", inv.ip, e)
 
         # Periodic garbage collection
         gc_counter += 1
         if gc_counter >= GC_INTERVAL:
             gc_counter = 0
             gc.collect()
+
+        # Write heartbeat for watchdog
+        try:
+            with open(heartbeat_file, "w", encoding="utf-8") as f:
+                f.write(str(int(time())))
+        except OSError:
+            pass
 
         return True
 
