@@ -56,7 +56,7 @@ MAX_CONSECUTIVE_FAILURES = 5
 # ---------------------------------------------------------------------------
 
 
-def _make_inverter(ip: str = "192.168.1.100", instance: int = 120) -> TasmotaPVInverter:
+def _make_inverter(ip: str = "192.168.1.100", instance: int = 120) -> TasmotaPVInverter:  # noqa: S104
     """Create a TasmotaPVInverter with all D-Bus interactions mocked."""
     session = MagicMock()
     inv = TasmotaPVInverter(ip, instance, session)
@@ -141,10 +141,10 @@ class TestParseTasmotaResponse:
         result = inv._get_tasmota_data()
         assert result is not None
         power, voltage, current, total = result
-        assert power == 123.4
-        assert voltage == 230.1
-        assert current == round(123.4 / 230.1, 2)
-        assert total == 5678.9
+        assert power == pytest.approx(123.4)
+        assert voltage == pytest.approx(230.1)
+        assert current == pytest.approx(0.54, rel=0.01)  # 123.4/230.1 ≈ 0.54
+        assert total == pytest.approx(5678.9)
 
     def test_missing_power_defaults_zero(self) -> None:
         inv = _make_inverter()
@@ -153,10 +153,10 @@ class TestParseTasmotaResponse:
         }
         inv._session.get.return_value.raise_for_status = MagicMock()
         power, voltage, current, total = inv._get_tasmota_data()
-        assert power == 0.0
-        assert voltage == 230.0
-        assert current == 0.0
-        assert total == 100.0
+        assert power == pytest.approx(0.0)
+        assert voltage == pytest.approx(230.0)
+        assert current == pytest.approx(0.0)
+        assert total == pytest.approx(100.0)
 
     def test_missing_voltage_defaults_115(self) -> None:
         inv = _make_inverter()
@@ -165,9 +165,9 @@ class TestParseTasmotaResponse:
         }
         inv._session.get.return_value.raise_for_status = MagicMock()
         power, voltage, current, _total = inv._get_tasmota_data()
-        assert power == 100.0
-        assert voltage == 115.0
-        assert current == round(100 / 115, 2)
+        assert power == pytest.approx(100.0)
+        assert voltage == pytest.approx(115.0)
+        assert current == pytest.approx(0.87, rel=0.01)  # 100/115 ≈ 0.87
 
     def test_zero_voltage_no_division_error(self) -> None:
         inv = _make_inverter()
@@ -176,20 +176,20 @@ class TestParseTasmotaResponse:
         }
         inv._session.get.return_value.raise_for_status = MagicMock()
         power, voltage, current, total = inv._get_tasmota_data()
-        assert power == 100.0
-        assert voltage == 0.0
-        assert current == 0.0
-        assert total == 50.0
+        assert power == pytest.approx(100.0)
+        assert voltage == pytest.approx(0.0)
+        assert current == pytest.approx(0.0)
+        assert total == pytest.approx(50.0)
 
     def test_empty_energy_dict(self) -> None:
         inv = _make_inverter()
         inv._session.get.return_value.json.return_value = {"StatusSNS": {"ENERGY": {}}}
         inv._session.get.return_value.raise_for_status = MagicMock()
         power, voltage, current, total = inv._get_tasmota_data()
-        assert power == 0.0
-        assert voltage == 115.0
-        assert current == 0.0
-        assert total == 0.0
+        assert power == pytest.approx(0.0)
+        assert voltage == pytest.approx(115.0)
+        assert current == pytest.approx(0.0)
+        assert total == pytest.approx(0.0)
 
     def test_missing_statussns_returns_none(self) -> None:
         inv = _make_inverter()

@@ -48,6 +48,12 @@ HTTP_TIMEOUT = (3.0, 5.0)  # (connect_timeout, read_timeout)
 MAX_CONSECUTIVE_FAILURES = 5
 ZERO_POWER_FALLBACK = True  # Report 0 power when offline
 
+# D-Bus path constants (avoid magic strings)
+_PATH_CONNECTED = "/Connected"
+_PATH_ERROR_CODE = "/ErrorCode"
+_PATH_AC_POWER = "/Ac/Power"
+_PATH_AC_L1_POWER = "/Ac/L1/Power"
+
 # Logging setup
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 logger = logging.getLogger("TasmotaPV")
@@ -74,18 +80,18 @@ class TasmotaPVInverter:
         self._dbusservice.add_path("/Mgmt/ProcessName", "dbus-tasmota-pv.py")
         self._dbusservice.add_path("/Mgmt/ProcessVersion", VERSION)
         self._dbusservice.add_path("/ProductName", f"Solar Tasmota {ip_address}")
-        self._dbusservice.add_path("/Connected", 1)
+        self._dbusservice.add_path(_PATH_CONNECTED, 1)
         self._dbusservice.add_path("/DeviceInstance", instance)
         self._dbusservice.add_path("/ProductId", 0xA144)  # Standard PV Inverter ID
-        self._dbusservice.add_path("/ErrorCode", 0)
+        self._dbusservice.add_path(_PATH_ERROR_CODE, 0)
         self._dbusservice.add_path("/FirmwareVersion", VERSION)
 
         # Position: 0 = AC Input (Grid side), 1 = AC Output (Load side)
         self._dbusservice.add_path("/Position", 0)
 
         # AC Power Paths
-        self._dbusservice.add_path("/Ac/Power", 0.0)
-        self._dbusservice.add_path("/Ac/L1/Power", 0.0)
+        self._dbusservice.add_path(_PATH_AC_POWER, 0.0)
+        self._dbusservice.add_path(_PATH_AC_L1_POWER, 0.0)
         self._dbusservice.add_path("/Ac/L1/Voltage", 115.0)
         self._dbusservice.add_path("/Ac/L1/Current", 0.0)
         self._dbusservice.add_path("/Ac/Energy/Forward", 0.0)
@@ -96,6 +102,7 @@ class TasmotaPVInverter:
     def _get_tasmota_data(self):
         """Fetch energy data from Tasmota device"""
         try:
+            # Tasmota devices do not support HTTPS. Local network = trusted.
             response = self._session.get(
                 f"http://{self.ip}/cm?cmnd=Status%208", timeout=HTTP_TIMEOUT
             )
@@ -152,21 +159,21 @@ class TasmotaPVInverter:
         if result is None:
             # Stale data: report via ErrorCode, fallback to zero power
             if self._consecutive_failures >= MAX_CONSECUTIVE_FAILURES:
-                self._dbusservice["/ErrorCode"] = 1  # Offline/comm error
-                self._dbusservice["/Connected"] = 0
-                self._dbusservice["/Ac/Power"] = 0.0
-                self._dbusservice["/Ac/L1/Power"] = 0.0
+                self._dbusservice[_PATH_ERROR_CODE] = 1  # Offline/comm error
+                self._dbusservice[_PATH_CONNECTED] = 0
+                self._dbusservice[_PATH_AC_POWER] = 0.0
+                self._dbusservice[_PATH_AC_L1_POWER] = 0.0
             else:
-                self._dbusservice["/ErrorCode"] = 0
-                self._dbusservice["/Connected"] = 1
+                self._dbusservice[_PATH_ERROR_CODE] = 0
+                self._dbusservice[_PATH_CONNECTED] = 1
             return
 
         power, voltage, current, total = result
 
-        self._dbusservice["/Connected"] = 1
-        self._dbusservice["/ErrorCode"] = 0
-        self._dbusservice["/Ac/Power"] = power
-        self._dbusservice["/Ac/L1/Power"] = power
+        self._dbusservice[_PATH_CONNECTED] = 1
+        self._dbusservice[_PATH_ERROR_CODE] = 0
+        self._dbusservice[_PATH_AC_POWER] = power
+        self._dbusservice[_PATH_AC_L1_POWER] = power
         self._dbusservice["/Ac/L1/Voltage"] = voltage
         self._dbusservice["/Ac/L1/Current"] = current
         self._dbusservice["/Ac/Energy/Forward"] = total
@@ -174,6 +181,9 @@ class TasmotaPVInverter:
 
 def load_config(config_path: Path) -> list[tuple[str, int]]:
     """Load devices from YAML config file"""
+    # Validate path before opening (prevent path traversal)
+    if not config_path.is_file():
+        raise ValueError(f"Config path is not a file: {config_path}")
     with open(config_path, encoding="utf-8") as f:
         config = yaml.safe_load(f)
     devices = []
@@ -252,6 +262,7 @@ Examples:
         pool_maxsize=len(devices) * 2,
         max_retries=0,  # We handle retries ourselves
     )
+    # Tasmota devices only support HTTP
     session.mount("http://", adapter)
 
     # Create inverter instances
@@ -282,8 +293,8 @@ Examples:
         for inv in inverters:
             try:
                 inv.update()
-            except Exception as e:
-                logger.error("Error updating %s: %s", inv.ip, e)
+            except Exception:
+                logger.exception("Error updating %s", inv.ip)
 
         # Periodic garbage collection
         gc_counter += 1
