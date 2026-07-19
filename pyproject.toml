@@ -1,4 +1,5 @@
 [tool.pylint.messages_control]
+ignore-paths = ["^.venv/"]
 disable = [
     "E0401",  # Unable to import (Venus OS specific libs not in venv)
     "C0103",  # Invalid name (legacy naming conventions)
