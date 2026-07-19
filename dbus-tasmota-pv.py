@@ -105,7 +105,7 @@ class TasmotaPVInverter:
             # Tasmota devices have no HTTPS support. Traffic stays on LAN = trusted.
             response = self._session.get(
                 f"http://{self.ip}/cm?cmnd=Status%208",
-                timeout=HTTP_TIMEOUT,  # noqa: S309
+                timeout=HTTP_TIMEOUT,  # nosonar
             )
             response.raise_for_status()
             data = response.json()
@@ -268,7 +268,7 @@ Examples:
         max_retries=0,  # We handle retries ourselves
     )
     # Tasmota devices only support HTTP; local network presumed trusted
-    session.mount("http://", adapter)  # noqa: S309
+    session.mount("http://", adapter)  # nosonar
 
     # Create inverter instances
     inverters = []
