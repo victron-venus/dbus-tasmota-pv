@@ -1,0 +1,8 @@
+# dbus-tasmota-pv configuration
+# Place at /etc/dbus-tasmota-pv.yaml
+
+devices:
+  - ip: 192.168.1.100
+    instance: 120
+  - ip: 192.168.1.101
+    instance: 121

@@ -15,22 +15,32 @@ Usage:
 Where each device is specified as IP:INSTANCE
 """
 
-import sys
 import argparse
 import logging
 import signal
+import sys
 import gc
+from pathlib import Path
 from time import time
 
 import requests
-from requests.adapters import HTTPAdapter
-import dbus
-from dbus.mainloop.glib import DBusGMainLoop
-from gi.repository import GLib
+import yaml  # noqa: F401 - config file support
 
-# Add Victron energy libraries to path
-sys.path.append('/opt/victronenergy/dbus-systemcalc-py/ext/velib_python')
-from vedbus import VeDbusService
+# Venus OS path (optional - needed on Venus OS only)
+VELIB_PATH = Path("/opt/victronenergy/dbus-systemcalc-py/ext/velib_python")
+if VELIB_PATH.exists():
+    sys.path.insert(0, str(VELIB_PATH))
+    from vedbus import VeDbusService  # type: ignore[attr-defined]
+    import dbus  # type: ignore[attr-defined]
+    from dbus.mainloop.glib import DBusGMainLoop  # type: ignore[attr-defined]
+    from gi.repository import GLib  # type: ignore[attr-defined]
+    from requests.adapters import HTTPAdapter  # type: ignore[attr-defined]
+else:
+    VeDbusService = None
+    dbus = None
+    DBusGMainLoop = None
+    GLib = None
+    HTTPAdapter = None
 
 VERSION = "1.3.0"
 POLL_INTERVAL_MS = 2000
@@ -39,10 +49,7 @@ MAX_CONSECUTIVE_FAILURES = 5
 ZERO_POWER_FALLBACK = True  # Report 0 power when offline
 
 # Logging setup
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s %(levelname)s %(message)s'
-)
+logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 logger = logging.getLogger("TasmotaPV")
 
 
@@ -60,28 +67,28 @@ class TasmotaPVInverter:
         # Create a private bus connection for each instance to avoid path conflicts
         self.bus = dbus.SystemBus(private=True)
 
-        service_name = f'com.victronenergy.pvinverter.tasmota_{instance}'
+        service_name = f"com.victronenergy.pvinverter.tasmota_{instance}"
         self._dbusservice = VeDbusService(service_name, bus=self.bus, register=False)
 
         # Mandatory management paths
-        self._dbusservice.add_path('/Mgmt/ProcessName', 'dbus-tasmota-pv.py')
-        self._dbusservice.add_path('/Mgmt/ProcessVersion', VERSION)
-        self._dbusservice.add_path('/ProductName', f'Solar Tasmota {ip_address}')
-        self._dbusservice.add_path('/Connected', 1)
-        self._dbusservice.add_path('/DeviceInstance', instance)
-        self._dbusservice.add_path('/ProductId', 0xA144)  # Standard PV Inverter ID
-        self._dbusservice.add_path('/ErrorCode', 0)
-        self._dbusservice.add_path('/FirmwareVersion', VERSION)
+        self._dbusservice.add_path("/Mgmt/ProcessName", "dbus-tasmota-pv.py")
+        self._dbusservice.add_path("/Mgmt/ProcessVersion", VERSION)
+        self._dbusservice.add_path("/ProductName", f"Solar Tasmota {ip_address}")
+        self._dbusservice.add_path("/Connected", 1)
+        self._dbusservice.add_path("/DeviceInstance", instance)
+        self._dbusservice.add_path("/ProductId", 0xA144)  # Standard PV Inverter ID
+        self._dbusservice.add_path("/ErrorCode", 0)
+        self._dbusservice.add_path("/FirmwareVersion", VERSION)
 
         # Position: 0 = AC Input (Grid side), 1 = AC Output (Load side)
-        self._dbusservice.add_path('/Position', 0)
+        self._dbusservice.add_path("/Position", 0)
 
         # AC Power Paths
-        self._dbusservice.add_path('/Ac/Power', 0.0)
-        self._dbusservice.add_path('/Ac/L1/Power', 0.0)
-        self._dbusservice.add_path('/Ac/L1/Voltage', 115.0)
-        self._dbusservice.add_path('/Ac/L1/Current', 0.0)
-        self._dbusservice.add_path('/Ac/Energy/Forward', 0.0)
+        self._dbusservice.add_path("/Ac/Power", 0.0)
+        self._dbusservice.add_path("/Ac/L1/Power", 0.0)
+        self._dbusservice.add_path("/Ac/L1/Voltage", 115.0)
+        self._dbusservice.add_path("/Ac/L1/Current", 0.0)
+        self._dbusservice.add_path("/Ac/Energy/Forward", 0.0)
 
         self._dbusservice.register()
         logger.info(f"Registered PV Inverter: {service_name} (IP: {ip_address})")
@@ -90,16 +97,15 @@ class TasmotaPVInverter:
         """Fetch energy data from Tasmota device"""
         try:
             response = self._session.get(
-                f'http://{self.ip}/cm?cmnd=Status%208',
-                timeout=HTTP_TIMEOUT
+                f"http://{self.ip}/cm?cmnd=Status%208", timeout=HTTP_TIMEOUT
             )
             response.raise_for_status()
             data = response.json()
 
-            energy = data['StatusSNS']['ENERGY']
-            power = float(energy.get('Power', 0.0))
-            voltage = float(energy.get('Voltage', 115.0))
-            total = float(energy.get('Total', 0.0))
+            energy = data["StatusSNS"]["ENERGY"]
+            power = float(energy.get("Power", 0.0))
+            voltage = float(energy.get("Voltage", 115.0))
+            total = float(energy.get("Total", 0.0))
             current = round(power / voltage, 2) if voltage > 0 else 0.0
 
             # Reset failure counter on success
@@ -129,11 +135,15 @@ class TasmotaPVInverter:
         if self._consecutive_failures == 1:
             logger.warning(f"Tasmota {self.ip}: {reason}")
         elif self._consecutive_failures == MAX_CONSECUTIVE_FAILURES:
-            logger.error(f"Tasmota {self.ip}: {MAX_CONSECUTIVE_FAILURES} consecutive failures, marking offline")
+            logger.error(
+                f"Tasmota {self.ip}: {MAX_CONSECUTIVE_FAILURES} consecutive failures, marking offline"
+            )
             self._connected = False
         elif self._consecutive_failures % 30 == 0:
             # Log every 30 failures (~1 minute)
-            logger.warning(f"Tasmota {self.ip}: still offline ({self._consecutive_failures} failures)")
+            logger.warning(
+                f"Tasmota {self.ip}: still offline ({self._consecutive_failures} failures)"
+            )
 
     def update(self):
         """Update D-Bus values from Tasmota data"""
@@ -142,60 +152,84 @@ class TasmotaPVInverter:
         if result is None:
             # Stale data: report via ErrorCode, fallback to zero power
             if self._consecutive_failures >= MAX_CONSECUTIVE_FAILURES:
-                self._dbusservice['/ErrorCode'] = 1  # Offline/comm error
-                self._dbusservice['/Connected'] = 0
-                self._dbusservice['/Ac/Power'] = 0.0
-                self._dbusservice['/Ac/L1/Power'] = 0.0
+                self._dbusservice["/ErrorCode"] = 1  # Offline/comm error
+                self._dbusservice["/Connected"] = 0
+                self._dbusservice["/Ac/Power"] = 0.0
+                self._dbusservice["/Ac/L1/Power"] = 0.0
             else:
-                self._dbusservice['/ErrorCode'] = 0
-                self._dbusservice['/Connected'] = 1
+                self._dbusservice["/ErrorCode"] = 0
+                self._dbusservice["/Connected"] = 1
             return
 
         power, voltage, current, total = result
 
-        self._dbusservice['/Connected'] = 1
-        self._dbusservice['/ErrorCode'] = 0
-        self._dbusservice['/Ac/Power'] = power
-        self._dbusservice['/Ac/L1/Power'] = power
-        self._dbusservice['/Ac/L1/Voltage'] = voltage
-        self._dbusservice['/Ac/L1/Current'] = current
-        self._dbusservice['/Ac/Energy/Forward'] = total
+        self._dbusservice["/Connected"] = 1
+        self._dbusservice["/ErrorCode"] = 0
+        self._dbusservice["/Ac/Power"] = power
+        self._dbusservice["/Ac/L1/Power"] = power
+        self._dbusservice["/Ac/L1/Voltage"] = voltage
+        self._dbusservice["/Ac/L1/Current"] = current
+        self._dbusservice["/Ac/Energy/Forward"] = total
+
+
+def load_config(config_path: Path) -> list[tuple[str, int]]:
+    """Load devices from YAML config file"""
+    with open(config_path, encoding="utf-8") as f:
+        config = yaml.safe_load(f)
+    devices = []
+    for device in config.get("devices", []):
+        ip = device.get("ip")
+        instance = device.get("instance")
+        if ip and instance is not None:
+            devices.append((ip, int(instance)))
+    return devices
 
 
 def main():
     parser = argparse.ArgumentParser(
-        description='Tasmota Energy Meter to D-Bus PV Inverter Bridge',
+        description="Tasmota Energy Meter to D-Bus PV Inverter Bridge",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
-    ./dbus-tasmota-pv.py --devices 192.168.1.100:120 192.168.1.101:121
-    ./dbus-tasmota-pv.py -d 192.168.164.73:120 -d 192.168.164.74:121
-        """
+    ./dbus-tasmota-pv.py --config /etc/dbus-tasmota-pv.yaml
+    ./dbus-tasmota-pv.py -d 192.168.1.100:120 -d 192.168.1.101:121
+        """,
     )
     parser.add_argument(
-        '-d', '--devices',
-        nargs='+',
-        default=['192.168.164.73:120', '192.168.164.74:121'],
-        help='Device specifications as IP:INSTANCE (e.g., 192.168.1.100:120)'
+        "-c",
+        "--config",
+        type=Path,
+        default=Path("/etc/dbus-tasmota-pv.yaml"),
+        help="Path to YAML config file",
+    )
+    parser.add_argument(
+        "-d",
+        "--devices",
+        nargs="+",
+        help="Device specifications as IP:INSTANCE (overrides config file)",
     )
     args = parser.parse_args()
 
     logger.info(f"=== dbus-tasmota-pv v{VERSION} ===")
 
-    # Parse device specifications
-    devices = []
-    for spec in args.devices:
-        try:
-            ip, instance = spec.rsplit(':', 1)
-            instance = int(instance)
-            devices.append((ip, instance))
-            logger.info(f"Configured device: {ip} (instance {instance})")
-        except ValueError:
-            logger.error(f"Invalid device specification: {spec} (expected IP:INSTANCE)")
-            sys.exit(1)
-
-    if not devices:
-        logger.error("No devices configured")
+    # Load devices: CLI args override config file
+    if args.devices:
+        devices = []
+        for spec in args.devices:
+            try:
+                ip, instance = spec.rsplit(":", 1)
+                instance = int(instance)
+                devices.append((ip, instance))
+                logger.info(f"CLI device: {ip} (instance {instance})")
+            except ValueError:
+                logger.error(f"Invalid device specification: {spec} (expected IP:INSTANCE)")
+                sys.exit(1)
+    elif args.config.exists():
+        devices = load_config(args.config)
+        logger.info(f"Loaded {len(devices)} device(s) from {args.config}")
+    else:
+        logger.error(f"No devices specified and config file not found: {args.config}")
+        logger.info("Use --devices IP:INSTANCE or create config file at /etc/dbus-tasmota-pv.yaml")
         sys.exit(1)
 
     # Setup D-Bus main loop
@@ -204,7 +238,7 @@ Examples:
 
     def graceful_shutdown(signum, frame):
         """Handle shutdown signals gracefully"""
-        sig_name = signal.Signals(signum).name if hasattr(signal, 'Signals') else str(signum)
+        sig_name = signal.Signals(signum).name if hasattr(signal, "Signals") else str(signum)
         logger.info(f"Received {sig_name}, shutting down gracefully...")
         mainloop.quit()
 
@@ -216,9 +250,9 @@ Examples:
     adapter = HTTPAdapter(
         pool_connections=len(devices),
         pool_maxsize=len(devices) * 2,
-        max_retries=0  # We handle retries ourselves
+        max_retries=0,  # We handle retries ourselves
     )
-    session.mount('http://', adapter)
+    session.mount("http://", adapter)
 
     # Create inverter instances
     inverters = []
