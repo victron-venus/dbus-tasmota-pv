@@ -24,7 +24,7 @@ from pathlib import Path
 from time import time
 
 import requests
-import yaml  # noqa: F401 - config file support
+import yaml
 
 # Venus OS path (optional - needed on Venus OS only)
 VELIB_PATH = Path("/opt/victronenergy/dbus-systemcalc-py/ext/velib_python")
@@ -46,13 +46,15 @@ VERSION = "1.3.0"
 POLL_INTERVAL_MS = 2000
 HTTP_TIMEOUT = (3.0, 5.0)  # (connect_timeout, read_timeout)
 MAX_CONSECUTIVE_FAILURES = 5
-ZERO_POWER_FALLBACK = True  # Report 0 power when offline
 
 # D-Bus path constants (avoid magic strings)
 _PATH_CONNECTED = "/Connected"
 _PATH_ERROR_CODE = "/ErrorCode"
 _PATH_AC_POWER = "/Ac/Power"
 _PATH_AC_L1_POWER = "/Ac/L1/Power"
+_PATH_AC_L1_VOLTAGE = "/Ac/L1/Voltage"
+_PATH_AC_L1_CURRENT = "/Ac/L1/Current"
+_PATH_AC_ENERGY_FORWARD = "/Ac/Energy/Forward"
 
 # Logging setup
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
@@ -92,9 +94,9 @@ class TasmotaPVInverter:
         # AC Power Paths
         self._dbusservice.add_path(_PATH_AC_POWER, 0.0)
         self._dbusservice.add_path(_PATH_AC_L1_POWER, 0.0)
-        self._dbusservice.add_path("/Ac/L1/Voltage", 115.0)
-        self._dbusservice.add_path("/Ac/L1/Current", 0.0)
-        self._dbusservice.add_path("/Ac/Energy/Forward", 0.0)
+        self._dbusservice.add_path(_PATH_AC_L1_VOLTAGE, 115.0)
+        self._dbusservice.add_path(_PATH_AC_L1_CURRENT, 0.0)
+        self._dbusservice.add_path(_PATH_AC_ENERGY_FORWARD, 0.0)
 
         self._dbusservice.register()
         logger.info(f"Registered PV Inverter: {service_name} (IP: {ip_address})")
@@ -175,9 +177,9 @@ class TasmotaPVInverter:
         self._dbusservice[_PATH_ERROR_CODE] = 0
         self._dbusservice[_PATH_AC_POWER] = power
         self._dbusservice[_PATH_AC_L1_POWER] = power
-        self._dbusservice["/Ac/L1/Voltage"] = voltage
-        self._dbusservice["/Ac/L1/Current"] = current
-        self._dbusservice["/Ac/Energy/Forward"] = total
+        self._dbusservice[_PATH_AC_L1_VOLTAGE] = voltage
+        self._dbusservice[_PATH_AC_L1_CURRENT] = current
+        self._dbusservice[_PATH_AC_ENERGY_FORWARD] = total
 
 
 def load_config(config_path: Path) -> list[tuple[str, int]]:
