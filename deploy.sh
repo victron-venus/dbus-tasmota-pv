@@ -11,13 +11,15 @@
 
 set -e
 
+readonly SEPARATOR='=============================================='
+
 SSH_HOST="${1:-Cerbo}"
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 REMOTE_DIR="/data/dbus-tasmota-pv"
 
-echo "=============================================="
+echo "$SEPARATOR"
 echo "  Deploying dbus-tasmota-pv to Venus OS"
-echo "=============================================="
+echo "$SEPARATOR"
 echo "SSH Host: $SSH_HOST"
 echo ""
 
@@ -53,9 +55,9 @@ echo ">>> Service status:"
 ssh "$SSH_HOST" "sleep 2 && svstat /service/dbus-tasmota-pv"
 
 echo ""
-echo "=============================================="
+echo "$SEPARATOR"
 echo "  Deployment Complete!"
-echo "=============================================="
+echo "$SEPARATOR"
 echo ""
 echo "The service is now running and will auto-start on reboot."
 echo ""
