@@ -305,6 +305,8 @@ def _write_heartbeat(heartbeat_file: str) -> None:
         with open(heartbeat_file, "w", encoding="utf-8") as f:
             f.write(str(int(time())))
     except OSError:
+        # Intentionally ignored: a failed heartbeat write should not crash the
+        # polling loop. The watchdog will detect the stale/missing file instead.
         pass
 
 
