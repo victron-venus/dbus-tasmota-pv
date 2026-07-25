@@ -11,13 +11,12 @@ on:
         required: true
         type: string
 
-permissions:
-  contents: write
-
 jobs:
   build:
     name: Build binaries
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
     strategy:
       matrix:
         include:
@@ -60,11 +59,13 @@ jobs:
 
       - name: Get version from tag
         id: get_version
+        env:
+          TAG: ${{ inputs.tag }}
         run: |
           version_input=""
           if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
             # Validate tag format for safety
-            version_input="${{ inputs.tag }}"
+            version_input="$TAG"
             if ! echo "$version_input" | grep -qE '^[0-9]+\.[0-9]+\.[0-9]+$'; then
               echo "Invalid tag format: $version_input" >&2
               exit 1
@@ -100,6 +101,8 @@ jobs:
     name: Attach binaries to release
     needs: build
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
 
     steps:
       - name: Harden the runner (Audit all outbound calls)

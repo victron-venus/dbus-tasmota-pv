@@ -232,7 +232,8 @@ def _load_devices(args: argparse.Namespace) -> list[tuple[str, int]]:
     sys.exit(1)
 
 
-def main():
+def _parse_args() -> argparse.Namespace:
+    """Build the argument parser and parse CLI arguments."""
     parser = argparse.ArgumentParser(
         description="Tasmota Energy Meter to D-Bus PV Inverter Bridge",
         formatter_class=argparse.RawDescriptionHelpFormatter,
@@ -255,15 +256,38 @@ Examples:
         nargs="+",
         help="Device specifications as IP:INSTANCE (overrides config file)",
     )
-    args = parser.parse_args()
+    return parser.parse_args()
 
-    logger.info(f"=== dbus-tasmota-pv v{VERSION} ===")
 
-    devices = _load_devices(args)
+def _build_session(device_count: int) -> requests.Session:
+    """Create a shared HTTP session with connection pooling."""
+    session = requests.Session()
+    adapter = HTTPAdapter(
+        pool_connections=device_count,
+        pool_maxsize=device_count * 2,
+        max_retries=0,  # We handle retries ourselves
+    )
+    # Tasmota devices only support HTTP; local network presumed trusted
+    session.mount("http://", adapter)
+    return session
 
-    # Setup D-Bus main loop
-    DBusGMainLoop(set_as_default=True)
-    mainloop = GLib.MainLoop()
+
+def _create_inverters(
+    devices: list[tuple[str, int]], session: requests.Session
+) -> list["TasmotaPVInverter"]:
+    """Create TasmotaPVInverter instances for each configured device."""
+    inverters = []
+    for ip, instance in devices:
+        try:
+            inv = TasmotaPVInverter(ip, instance, session)
+            inverters.append(inv)
+        except Exception:
+            logger.exception(f"Failed to create inverter for {ip}")
+    return inverters
+
+
+def _register_signal_handlers(mainloop) -> None:
+    """Register SIGTERM/SIGINT handlers for graceful shutdown."""
 
     def graceful_shutdown(signum, frame):
         """Handle shutdown signals gracefully"""
@@ -274,24 +298,60 @@ Examples:
     signal.signal(signal.SIGTERM, graceful_shutdown)
     signal.signal(signal.SIGINT, graceful_shutdown)
 
+
+def _write_heartbeat(heartbeat_file: str) -> None:
+    """Write the current time to the heartbeat file for the watchdog."""
+    try:
+        with open(heartbeat_file, "w", encoding="utf-8") as f:
+            f.write(str(int(time())))
+    except OSError:
+        pass
+
+
+def _make_poll_fn(inverters: list["TasmotaPVInverter"], heartbeat_file: str):
+    """Build the periodic poll callback with memory management."""
+    state = {"gc_counter": 0}
+    gc_interval = 150  # Run GC every 150 polls (~5 minutes)
+
+    def poll():
+        """Periodic update with memory management"""
+        for inv in inverters:
+            try:
+                inv.update()
+            except Exception:
+                logger.exception("Error updating %s", inv.ip)
+
+        # Periodic garbage collection
+        state["gc_counter"] += 1
+        if state["gc_counter"] >= gc_interval:
+            state["gc_counter"] = 0
+            gc.collect()
+
+        _write_heartbeat(heartbeat_file)
+
+        return True
+
+    return poll
+
+
+def main():
+    args = _parse_args()
+
+    logger.info(f"=== dbus-tasmota-pv v{VERSION} ===")
+
+    devices = _load_devices(args)
+
+    # Setup D-Bus main loop
+    DBusGMainLoop(set_as_default=True)
+    mainloop = GLib.MainLoop()
+
+    _register_signal_handlers(mainloop)
+
     # Create shared HTTP session with connection pooling
-    session = requests.Session()
-    adapter = HTTPAdapter(
-        pool_connections=len(devices),
-        pool_maxsize=len(devices) * 2,
-        max_retries=0,  # We handle retries ourselves
-    )
-    # Tasmota devices only support HTTP; local network presumed trusted
-    session.mount("http://", adapter)
+    session = _build_session(len(devices))
 
     # Create inverter instances
-    inverters = []
-    for ip, instance in devices:
-        try:
-            inv = TasmotaPVInverter(ip, instance, session)
-            inverters.append(inv)
-        except Exception as e:
-            logger.error(f"Failed to create inverter for {ip}: {e}")
+    inverters = _create_inverters(devices, session)
 
     if not inverters:
         logger.error("No inverters could be created")
@@ -301,36 +361,8 @@ Examples:
     # Heartbeat file for watchdog
     heartbeat_file = "/run/dbus-tasmota-pv.alive"
 
-    # Periodic garbage collection counter
-    gc_counter = 0
-    GC_INTERVAL = 150  # Run GC every 150 polls (~5 minutes)
-
-    def poll():
-        """Periodic update with memory management"""
-        nonlocal gc_counter
-
-        for inv in inverters:
-            try:
-                inv.update()
-            except Exception:
-                logger.exception("Error updating %s", inv.ip)
-
-        # Periodic garbage collection
-        gc_counter += 1
-        if gc_counter >= GC_INTERVAL:
-            gc_counter = 0
-            gc.collect()
-
-        # Write heartbeat for watchdog
-        try:
-            with open(heartbeat_file, "w", encoding="utf-8") as f:
-                f.write(str(int(time())))
-        except OSError:
-            pass
-
-        return True
-
     # Start polling
+    poll = _make_poll_fn(inverters, heartbeat_file)
     GLib.timeout_add(POLL_INTERVAL_MS, poll)
 
     logger.info(f"Service started with {len(inverters)} inverter(s), entering main loop")
@@ -339,8 +371,8 @@ Examples:
         mainloop.run()
     except KeyboardInterrupt:
         logger.info("KeyboardInterrupt received")
-    except Exception as e:
-        logger.error(f"Unexpected error in main loop: {e}")
+    except Exception:
+        logger.exception("Unexpected error in main loop")
     finally:
         logger.info("Cleaning up...")
         session.close()

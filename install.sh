@@ -8,17 +8,19 @@
 
 set -e
 
+readonly SEPARATOR='=============================================='
+
 INSTALL_DIR="/data/dbus-tasmota-pv"
 SERVICE_DIR="/service/dbus-tasmota-pv"
 LOG_DIR="/var/log/dbus-tasmota-pv"
 
-echo "=============================================="
+echo "$SEPARATOR"
 echo "  dbus-tasmota-pv Installer for Venus OS"
-echo "=============================================="
+echo "$SEPARATOR"
 echo ""
 
 # Check for required files
-if [ ! -f "dbus-tasmota-pv.py" ] && [ ! -f "$INSTALL_DIR/dbus-tasmota-pv.py" ]; then
+if [[ ! -f "dbus-tasmota-pv.py" ]] && [[ ! -f "$INSTALL_DIR/dbus-tasmota-pv.py" ]]; then
     echo "Error: dbus-tasmota-pv.py not found" >&2
     exit 1
 fi
@@ -27,17 +29,17 @@ fi
 mkdir -p "$INSTALL_DIR"
 
 # Copy Python script (skip if already in target directory)
-if [ -f "dbus-tasmota-pv.py" ] && [ "$(pwd)" != "$INSTALL_DIR" ]; then
+if [[ -f "dbus-tasmota-pv.py" ]] && [[ "$(pwd)" != "$INSTALL_DIR" ]]; then
     cp dbus-tasmota-pv.py "$INSTALL_DIR/"
     chmod +x "$INSTALL_DIR/dbus-tasmota-pv.py"
     echo "Copied dbus-tasmota-pv.py to $INSTALL_DIR"
-elif [ -f "$INSTALL_DIR/dbus-tasmota-pv.py" ]; then
+elif [[ -f "$INSTALL_DIR/dbus-tasmota-pv.py" ]]; then
     chmod +x "$INSTALL_DIR/dbus-tasmota-pv.py"
     echo "Using existing $INSTALL_DIR/dbus-tasmota-pv.py"
 fi
 
 # Remove old symlink if exists and create proper directory
-if [ -L "$SERVICE_DIR" ]; then
+if [[ -L "$SERVICE_DIR" ]]; then
     echo "Removing old symlink..."
     rm -f "$SERVICE_DIR"
 fi
@@ -48,7 +50,7 @@ mkdir -p "$SERVICE_DIR"
 mkdir -p "$LOG_DIR"
 
 # Verify log directory is writable
-if [ ! -w "$LOG_DIR" ]; then
+if [[ ! -w "$LOG_DIR" ]]; then
     echo "Warning: Log directory $LOG_DIR is not writable" >&2
 fi
 
@@ -66,9 +68,9 @@ echo "Note: daemontools will automatically start this service on boot."
 echo "No rc.local modification needed."
 
 echo ""
-echo "=============================================="
+echo "$SEPARATOR"
 echo "  Installation Complete!"
-echo "=============================================="
+echo "$SEPARATOR"
 echo ""
 echo "Service will start automatically now and on reboot."
 echo "(daemontools handles auto-start, no rc.local needed)"
