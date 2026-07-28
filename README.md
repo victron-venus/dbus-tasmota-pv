@@ -24,16 +24,35 @@
 
 Venus OS driver for Tasmota smart plugs monitoring inline PV inverters.
 
+---
+
+## Release Channels & CI/CD
+
+This repository provides automated build archives for Victron Venus OS installations:
+
+- **Stable Releases**: Tagged as `vX.Y.Z` (e.g., `v1.0.0`). Contains packaged Venus OS installer tarballs (`dbus-tasmota-pv-*.tar.gz`).
+- **Pre-releases**: Tagged with `-rc.N` or `-beta.N`. Automatically flagged as Pre-release on GitHub Releases.
+- **Nightly Builds**: Built daily at 02:00 UTC. Generates a fresh `dbus-tasmota-pv-nightly.tar.gz` package published to the **[Nightly Build Release](https://github.com/victron-venus/dbus-tasmota-pv/releases/tag/nightly)**.
+
+---
+
+## Completed Features
+
+- ✅ **CI/CD Releases & Nightly Builds**: Installer packaging workflows configured for automated releases
+
+---
+
 ## Overview
 
 This script polls Tasmota smart plugs via HTTP and publishes power data to D-Bus as PV inverters. This allows Victron GX devices to see and display solar production from simple inline MPPT inverters that don't have native Victron integration.
 
-```
-[Solar Panel] → [Inline MPPT Inverter] → [Tasmota Smart Plug] → AC Grid
-                                               ↓ HTTP polling
-                                        [This Script on Cerbo GX]
-                                               ↓ D-Bus
-                                        [Victron GUI / VRM]
+```mermaid
+flowchart TB
+    SP[Solar Panel] --> MPPT[Inline MPPT Inverter]
+    MPPT --> TP[Tasmota Smart Plug]
+    TP --> GRID[AC Grid]
+    TP --> SCRIPT[dbus-tasmota-pv on Cerbo GX<br/>via HTTP polling]
+    SCRIPT --> GUI[Victron GUI / VRM<br/>via D-Bus]
 ```
 
 ## Features

@@ -7,8 +7,6 @@
 source "/data/SetupHelper/HelperResources/IncludeHelpers"
 #### end of lines to include helper resources
 
-packageName="dbus-tasmota-pv"
-
 #### running manually - prompt for input
 if [ "$scriptAction" == 'NONE' ]; then
     standardActionPrompt

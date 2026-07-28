@@ -11,15 +11,23 @@
 
 set -e
 
+readonly SEPARATOR='=============================================='
+
 SSH_HOST="${1:-Cerbo}"
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 REMOTE_DIR="/data/dbus-tasmota-pv"
 
-echo "=============================================="
+echo "$SEPARATOR"
 echo "  Deploying dbus-tasmota-pv to Venus OS"
-echo "=============================================="
+echo "$SEPARATOR"
 echo "SSH Host: $SSH_HOST"
 echo ""
+
+# Verify SSH host is reachable
+if ! ssh -o ConnectTimeout=5 -o BatchMode=yes "$SSH_HOST" "echo ok" >/dev/null 2>&1; then
+    echo "Error: Cannot connect to $SSH_HOST" >&2
+    exit 1
+fi
 
 # Create directory on remote
 echo ">>> Creating directory..."
@@ -36,7 +44,10 @@ ssh "$SSH_HOST" "chmod +x $REMOTE_DIR/*.py $REMOTE_DIR/install.sh"
 # Run install script
 echo ""
 echo ">>> Running install script on Venus OS..."
-ssh "$SSH_HOST" "cd $REMOTE_DIR && ./install.sh"
+if ! ssh "$SSH_HOST" "cd $REMOTE_DIR && ./install.sh"; then
+    echo "Error: install script failed" >&2
+    exit 1
+fi
 
 # Show status
 echo ""
@@ -44,9 +55,9 @@ echo ">>> Service status:"
 ssh "$SSH_HOST" "sleep 2 && svstat /service/dbus-tasmota-pv"
 
 echo ""
-echo "=============================================="
+echo "$SEPARATOR"
 echo "  Deployment Complete!"
-echo "=============================================="
+echo "$SEPARATOR"
 echo ""
 echo "The service is now running and will auto-start on reboot."
 echo ""

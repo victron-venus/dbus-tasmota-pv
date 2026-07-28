@@ -1,3 +1,4 @@
+.venv/
 commit.txt
 release.txt
 logs
