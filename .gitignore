@@ -3,4 +3,3 @@ commit.txt
 release.txt
 logs
 __pycache__/
-*.bak
