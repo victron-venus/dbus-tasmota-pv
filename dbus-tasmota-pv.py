@@ -220,6 +220,22 @@ class TasmotaPVInverter:
         self._dbusservice.register()
         logger.info(f"Registered PV Inverter: {service_name} (IP: {ip_address})")
 
+    def _set_paths(self, values: dict[str, Any]) -> None:
+        """Update D-Bus paths safely from any thread.
+
+        The D-Bus service is serviced by the GLib main loop running in a
+        background thread, while `update()` runs on the asyncio event loop
+        thread. Marshal the writes onto the GLib thread via `GLib.idle_add`
+        to avoid concurrent access to the underlying D-Bus connection.
+        """
+
+        def _apply():
+            for path, value in values.items():
+                self._dbusservice[path] = value
+            return False
+
+        GLib.idle_add(_apply)
+
     async def _get_tasmota_data(self) -> tuple[float, float, float, float] | None:
         """Fetch energy data from Tasmota device"""
         try:
@@ -291,24 +307,31 @@ class TasmotaPVInverter:
         if result is None:
             # Stale data: report via ErrorCode, fallback to zero power
             if self._consecutive_failures >= MAX_CONSECUTIVE_FAILURES:
-                self._dbusservice[_PATH_ERROR_CODE] = 1  # Offline/comm error
-                self._dbusservice[_PATH_CONNECTED] = 0
-                self._dbusservice[_PATH_AC_POWER] = 0.0
-                self._dbusservice[_PATH_AC_L1_POWER] = 0.0
+                self._set_paths(
+                    {
+                        _PATH_ERROR_CODE: 1,  # Offline/comm error
+                        _PATH_CONNECTED: 0,
+                        _PATH_AC_POWER: 0.0,
+                        _PATH_AC_L1_POWER: 0.0,
+                    }
+                )
             else:
-                self._dbusservice[_PATH_ERROR_CODE] = 0
-                self._dbusservice[_PATH_CONNECTED] = 1
+                self._set_paths({_PATH_ERROR_CODE: 0, _PATH_CONNECTED: 1})
             return
 
         power, voltage, current, total = result
 
-        self._dbusservice[_PATH_CONNECTED] = 1
-        self._dbusservice[_PATH_ERROR_CODE] = 0
-        self._dbusservice[_PATH_AC_POWER] = power
-        self._dbusservice[_PATH_AC_L1_POWER] = power
-        self._dbusservice[_PATH_AC_L1_VOLTAGE] = voltage
-        self._dbusservice[_PATH_AC_L1_CURRENT] = current
-        self._dbusservice[_PATH_AC_ENERGY_FORWARD] = total
+        self._set_paths(
+            {
+                _PATH_CONNECTED: 1,
+                _PATH_ERROR_CODE: 0,
+                _PATH_AC_POWER: power,
+                _PATH_AC_L1_POWER: power,
+                _PATH_AC_L1_VOLTAGE: voltage,
+                _PATH_AC_L1_CURRENT: current,
+                _PATH_AC_ENERGY_FORWARD: total,
+            }
+        )
 
 
 def load_config(config_path: Path) -> list[tuple[str, int]]:
