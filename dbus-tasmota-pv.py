@@ -8,23 +8,41 @@ Reads power data from Tasmota smart plugs (with energy monitoring)
 and publishes to Victron D-Bus as PV Inverter devices.
 
 Supports multiple Tasmota devices with individual polling.
+Features:
+- Async HTTP polling with httpx for non-blocking I/O
+- mDNS/SSDP auto-discovery of Tasmota devices
+- Connection pooling and graceful error handling
 
 Usage:
     ./dbus-tasmota-pv.py --devices 192.168.164.73:120 192.168.164.74:121
+    ./dbus-tasmota-pv.py --discover  # Auto-discover Tasmota devices via mDNS
+    ./dbus-tasmota-pv.py --config /etc/dbus-tasmota-pv.yaml
 
 Where each device is specified as IP:INSTANCE
 """
 
 import argparse
+import asyncio
+import gc
 import logging
 import signal
 import sys
-import gc
+import threading
 from pathlib import Path
 from time import time
+from typing import Any
 
-import requests
+import httpx
 import yaml
+
+# Optional mDNS discovery
+try:
+    from zeroconf import IPVersion, ServiceBrowser, ServiceStateChange, Zeroconf
+
+    ZEROCONF_AVAILABLE = True
+except ImportError:
+    ZEROCONF_AVAILABLE = False
+    ServiceBrowser = ServiceStateChange = Zeroconf = IPVersion = None
 
 # Venus OS path (optional - needed on Venus OS only)
 VELIB_PATH = Path("/opt/victronenergy/dbus-systemcalc-py/ext/velib_python")
@@ -34,17 +52,15 @@ if VELIB_PATH.exists():
     import dbus  # type: ignore[attr-defined]
     from dbus.mainloop.glib import DBusGMainLoop  # type: ignore[attr-defined]
     from gi.repository import GLib  # type: ignore[attr-defined]
-    from requests.adapters import HTTPAdapter  # type: ignore[attr-defined]
 else:
     VeDbusService = None
     dbus = None
     DBusGMainLoop = None
     GLib = None
-    HTTPAdapter = None
 
-VERSION = "1.3.0"
+VERSION = "1.4.0"
 POLL_INTERVAL_MS = 2000
-HTTP_TIMEOUT = (3.0, 5.0)  # (connect_timeout, read_timeout)
+HTTP_TIMEOUT = 5.0  # seconds
 MAX_CONSECUTIVE_FAILURES = 5
 
 # D-Bus path constants (avoid magic strings)
@@ -56,18 +72,121 @@ _PATH_AC_L1_VOLTAGE = "/Ac/L1/Voltage"
 _PATH_AC_L1_CURRENT = "/Ac/L1/Current"
 _PATH_AC_ENERGY_FORWARD = "/Ac/Energy/Forward"
 
+# mDNS service type for Tasmota
+TASMOTA_MDNS_TYPE = "_tasmota._tcp.local."
+
 # Logging setup
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 logger = logging.getLogger("TasmotaPV")
 
 
+class AsyncHTTPClient:
+    """Async HTTP client wrapper with connection pooling."""
+
+    def __init__(self, max_connections: int):
+        self._client = httpx.AsyncClient(
+            timeout=httpx.Timeout(HTTP_TIMEOUT),
+            limits=httpx.Limits(
+                max_connections=max_connections,
+                max_keepalive_connections=max_connections * 2,
+            ),
+        )
+
+    async def get(self, url: str) -> httpx.Response:
+        """Async GET request."""
+        return await self._client.get(url)
+
+    async def close(self):
+        """Close the client."""
+        await self._client.aclose()
+
+
+class TasmotaMDNSDiscovery:
+    """mDNS discovery for Tasmota devices."""
+
+    def __init__(self, timeout: float = 5.0):
+        self.timeout = timeout
+        self._found_devices: dict[str, str] = {}  # ip -> hostname
+        self._browser = None
+        self._zeroconf = None
+        self._resolving = set()
+        self._tasks: set[asyncio.Task] = set()
+
+    def _on_service_state_change(
+        self,
+        zeroconf: Any,
+        service_type: str,
+        name: str,
+        state_change: ServiceStateChange,
+    ) -> None:
+        """Handle service state changes."""
+        if state_change is ServiceStateChange.Added:
+            task = asyncio.create_task(self._resolve_service(zeroconf, service_type, name))
+            self._tasks.add(task)
+            task.add_done_callback(self._tasks.discard)
+
+    async def _resolve_service(self, zeroconf: Any, service_type: str, name: str) -> None:
+        """Resolve service to get IP address."""
+        if name in self._resolving:
+            return
+        self._resolving.add(name)
+        try:
+            info = await asyncio.wait_for(
+                asyncio.get_event_loop().run_in_executor(
+                    None, zeroconf.get_service_info, service_type, name
+                ),
+                timeout=2.0,
+            )
+            if info:
+                ip = ".".join(str(b) for b in info.addresses[0])
+                self._found_devices[ip] = name
+                logger.debug("Discovered Tasmota: %s at %s", name, ip)
+        except Exception as e:
+            logger.debug("Failed to resolve service %s: %s", name, e)
+        finally:
+            self._resolving.discard(name)
+
+    async def discover(self) -> dict[str, str]:
+        """Discover Tasmota devices via mDNS."""
+        if not ZEROCONF_AVAILABLE:
+            logger.warning("zeroconf not installed, mDNS discovery disabled")
+            return {}
+
+        self._found_devices = {}
+
+        self._zeroconf = Zeroconf(ip_version=IPVersion.All)
+        self._browser = ServiceBrowser(
+            self._zeroconf,
+            TASMOTA_MDNS_TYPE,
+            handlers=[self._on_service_state_change],
+        )
+
+        # Wait for the full timeout to allow all devices to be discovered
+        # and resolved (returning early would miss devices found later).
+        await asyncio.sleep(self.timeout)
+
+        # Give in-flight resolutions a chance to finish before closing.
+        while self._resolving:
+            await asyncio.sleep(0.1)
+
+        if self._zeroconf:
+            self._zeroconf.close()
+
+        return self._found_devices
+
+
 class TasmotaPVInverter:
     """Single Tasmota device as PV Inverter on D-Bus"""
 
-    def __init__(self, ip_address: str, instance: int, session: requests.Session):
+    def __init__(
+        self,
+        ip_address: str,
+        instance: int,
+        client: AsyncHTTPClient,
+    ):
         self.ip = ip_address
         self.instance = instance
-        self._session = session
+        self._client = client
         self._consecutive_failures = 0
         self._last_success = time()
         self._connected = True
@@ -101,14 +220,26 @@ class TasmotaPVInverter:
         self._dbusservice.register()
         logger.info(f"Registered PV Inverter: {service_name} (IP: {ip_address})")
 
-    def _get_tasmota_data(self):
+    def _set_paths(self, values: dict[str, Any]) -> None:
+        """Update D-Bus paths safely from any thread.
+
+        The D-Bus service is serviced by the GLib main loop running in a
+        background thread, while `update()` runs on the asyncio event loop
+        thread. Marshal the writes onto the GLib thread via `GLib.idle_add`
+        to avoid concurrent access to the underlying D-Bus connection.
+        """
+
+        def _apply():
+            for path, value in values.items():
+                self._dbusservice[path] = value
+            return False
+
+        GLib.idle_add(_apply)
+
+    async def _get_tasmota_data(self) -> tuple[float, float, float, float] | None:
         """Fetch energy data from Tasmota device"""
         try:
-            # Tasmota devices have no HTTPS support. Traffic stays on LAN = trusted.
-            response = self._session.get(
-                f"http://{self.ip}/cm?cmnd=Status%208",
-                timeout=HTTP_TIMEOUT,
-            )
+            response = await self._client.get(f"http://{self.ip}/cm?cmnd=Status%208")
             response.raise_for_status()
             data = response.json()
 
@@ -128,14 +259,28 @@ class TasmotaPVInverter:
 
             return power, voltage, current, total
 
-        except requests.exceptions.Timeout:
-            self._handle_failure("timeout")
-            return None
-        except requests.exceptions.ConnectionError:
-            self._handle_failure("connection error")
-            return None
         except Exception as e:
-            self._handle_failure(str(e))
+            # Prefer isinstance checks against real httpx exception classes so that
+            # concrete subclasses (ConnectTimeout, ReadTimeout, PoolTimeout, etc.)
+            # are categorized correctly. Fall back to matching by class name since
+            # httpx may be mocked in tests (isinstance against a MagicMock attribute
+            # would raise TypeError).
+            timeout_exc = getattr(httpx, "TimeoutException", None)
+            connect_exc = getattr(httpx, "ConnectError", None)
+            is_timeout = isinstance(timeout_exc, type) and isinstance(e, timeout_exc)
+            is_connect_error = isinstance(connect_exc, type) and isinstance(e, connect_exc)
+
+            if not is_timeout and not is_connect_error:
+                error_type = type(e).__name__
+                is_timeout = error_type == "TimeoutException"
+                is_connect_error = error_type == "ConnectError"
+
+            if is_timeout:
+                self._handle_failure("timeout")
+            elif is_connect_error:
+                self._handle_failure("connection error")
+            else:
+                self._handle_failure(str(e))
             return None
 
     def _handle_failure(self, reason: str):
@@ -155,31 +300,38 @@ class TasmotaPVInverter:
                 f"Tasmota {self.ip}: still offline ({self._consecutive_failures} failures)"
             )
 
-    def update(self):
+    async def update(self):
         """Update D-Bus values from Tasmota data"""
-        result = self._get_tasmota_data()
+        result = await self._get_tasmota_data()
 
         if result is None:
             # Stale data: report via ErrorCode, fallback to zero power
             if self._consecutive_failures >= MAX_CONSECUTIVE_FAILURES:
-                self._dbusservice[_PATH_ERROR_CODE] = 1  # Offline/comm error
-                self._dbusservice[_PATH_CONNECTED] = 0
-                self._dbusservice[_PATH_AC_POWER] = 0.0
-                self._dbusservice[_PATH_AC_L1_POWER] = 0.0
+                self._set_paths(
+                    {
+                        _PATH_ERROR_CODE: 1,  # Offline/comm error
+                        _PATH_CONNECTED: 0,
+                        _PATH_AC_POWER: 0.0,
+                        _PATH_AC_L1_POWER: 0.0,
+                    }
+                )
             else:
-                self._dbusservice[_PATH_ERROR_CODE] = 0
-                self._dbusservice[_PATH_CONNECTED] = 1
+                self._set_paths({_PATH_ERROR_CODE: 0, _PATH_CONNECTED: 1})
             return
 
         power, voltage, current, total = result
 
-        self._dbusservice[_PATH_CONNECTED] = 1
-        self._dbusservice[_PATH_ERROR_CODE] = 0
-        self._dbusservice[_PATH_AC_POWER] = power
-        self._dbusservice[_PATH_AC_L1_POWER] = power
-        self._dbusservice[_PATH_AC_L1_VOLTAGE] = voltage
-        self._dbusservice[_PATH_AC_L1_CURRENT] = current
-        self._dbusservice[_PATH_AC_ENERGY_FORWARD] = total
+        self._set_paths(
+            {
+                _PATH_CONNECTED: 1,
+                _PATH_ERROR_CODE: 0,
+                _PATH_AC_POWER: power,
+                _PATH_AC_L1_POWER: power,
+                _PATH_AC_L1_VOLTAGE: voltage,
+                _PATH_AC_L1_CURRENT: current,
+                _PATH_AC_ENERGY_FORWARD: total,
+            }
+        )
 
 
 def load_config(config_path: Path) -> list[tuple[str, int]]:
@@ -209,7 +361,7 @@ def _parse_device_spec(spec: str) -> tuple[str, int]:
 
 
 def _load_devices(args: argparse.Namespace) -> list[tuple[str, int]]:
-    """Load devices from CLI args or config file."""
+    """Load devices from CLI args, mDNS discovery, or config file."""
     if args.devices:
         devices = []
         for spec in args.devices:
@@ -222,14 +374,139 @@ def _load_devices(args: argparse.Namespace) -> list[tuple[str, int]]:
                 sys.exit(1)
         return devices
 
+    if args.discover:
+        logger.info("Auto-discovering Tasmota devices via mDNS...")
+        try:
+            discovery = TasmotaMDNSDiscovery(timeout=args.discover_timeout)
+            discovered = asyncio.run(discovery.discover())
+            if discovered:
+                # Auto-assign instances starting from 120
+                devices = [(ip, 120 + i) for i, ip in enumerate(discovered.keys())]
+                logger.info(f"Discovered {len(devices)} Tasmota device(s): {devices}")
+                return devices
+            logger.warning("No Tasmota devices discovered via mDNS")
+        except Exception:
+            logger.exception("mDNS discovery failed")
+
     if args.config.exists():
         devices = load_config(args.config)
         logger.info(f"Loaded {len(devices)} device(s) from {args.config}")
         return devices
 
     logger.error(f"No devices specified and config file not found: {args.config}")
-    logger.info("Use --devices IP:INSTANCE or create config file at /etc/dbus-tasmota-pv.yaml")
+    logger.info(
+        "Use --devices IP:INSTANCE, --discover, or create config file at /etc/dbus-tasmota-pv.yaml"
+    )
     sys.exit(1)
+
+
+def _create_inverters(
+    devices: list[tuple[str, int]], client: AsyncHTTPClient
+) -> list[TasmotaPVInverter]:
+    """Create TasmotaPVInverter instances for each configured device."""
+    inverters = []
+    for ip, instance in devices:
+        try:
+            inv = TasmotaPVInverter(ip, instance, client)
+            inverters.append(inv)
+        except Exception:
+            logger.exception(f"Failed to create inverter for {ip}")
+    return inverters
+
+
+def _write_heartbeat(heartbeat_file: str) -> None:
+    """Write the current timestamp to the heartbeat file (blocking I/O)."""
+    try:
+        with open(heartbeat_file, "w", encoding="utf-8") as f:
+            f.write(str(int(time())))
+    except OSError:
+        # Intentionally ignored: failed heartbeat write should not crash polling
+        pass
+
+
+def _make_poll_fn(inverters: list[TasmotaPVInverter], heartbeat_file: str):
+    """Build the periodic poll callback with memory management."""
+    state = {"gc_counter": 0}
+    gc_interval = 150  # Run GC every 150 polls (~5 minutes)
+
+    async def poll() -> bool:
+        """Periodic update with memory management"""
+        for inv in inverters:
+            try:
+                await inv.update()
+            except Exception:
+                logger.exception("Error updating %s", inv.ip)
+
+        # Periodic garbage collection
+        state["gc_counter"] += 1
+        if state["gc_counter"] >= gc_interval:
+            state["gc_counter"] = 0
+            gc.collect()
+
+        # Heartbeat for watchdog (run blocking I/O off the event loop)
+        await asyncio.to_thread(_write_heartbeat, heartbeat_file)
+
+        return True
+
+    return poll
+
+
+async def _async_main(
+    devices: list[tuple[str, int]], heartbeat_file: str, shutdown_event: asyncio.Event
+):
+    """Async main function."""
+    logger.info(f"=== dbus-tasmota-pv v{VERSION} ===")
+
+    # Create shared HTTP client with connection pooling
+    client = AsyncHTTPClient(len(devices))
+
+    # Create inverter instances
+    inverters = _create_inverters(devices, client)
+
+    if not inverters:
+        logger.error("No inverters could be created")
+        await client.close()
+        sys.exit(1)
+
+    # Start polling
+    poll = _make_poll_fn(inverters, heartbeat_file)
+
+    logger.info(f"Service started with {len(inverters)} inverter(s), entering main loop")
+
+    try:
+        while not shutdown_event.is_set():
+            try:
+                await asyncio.wait_for(
+                    shutdown_event.wait(), timeout=POLL_INTERVAL_MS / 1000
+                )
+            except asyncio.TimeoutError:
+                # Expected: wait_for times out every POLL_INTERVAL_MS when no
+                # shutdown signal has been received, so we just loop and poll.
+                pass
+            if shutdown_event.is_set():
+                break
+            await poll()
+    except Exception:
+        logger.exception("Unexpected error in main loop")
+    finally:
+        logger.info("Cleaning up...")
+        await client.close()
+        gc.collect()
+        logger.info("Shutdown complete")
+
+
+def _register_signal_handlers(mainloop, shutdown_event: asyncio.Event, loop) -> None:
+    """Register SIGTERM/SIGINT handlers for graceful shutdown."""
+
+    def graceful_shutdown(signum, frame):
+        """Handle shutdown signals gracefully"""
+        sig_name = signal.Signals(signum).name if hasattr(signal, "Signals") else str(signum)
+        logger.info(f"Received {sig_name}, shutting down gracefully...")
+        loop.call_soon_threadsafe(shutdown_event.set)
+        mainloop.quit()
+
+    signal.signal(signal.SIGTERM, graceful_shutdown)
+    signal.signal(signal.SIGINT, graceful_shutdown)
 
 
 def _parse_args() -> argparse.Namespace:
@@ -241,6 +518,8 @@ def _parse_args() -> argparse.Namespace:
 Examples:
     ./dbus-tasmota-pv.py --config /etc/dbus-tasmota-pv.yaml
     ./dbus-tasmota-pv.py -d 192.168.1.100:120 -d 192.168.1.101:121
+    ./dbus-tasmota-pv.py --discover
+    ./dbus-tasmota-pv.py --discover --discover-timeout 10
         """,
     )
     parser.add_argument(
@@ -256,90 +535,43 @@ Examples:
         nargs="+",
         help="Device specifications as IP:INSTANCE (overrides config file)",
     )
+    parser.add_argument(
+        "--discover",
+        action="store_true",
+        help="Auto-discover Tasmota devices via mDNS/SSDP",
+    )
+    parser.add_argument(
+        "--discover-timeout",
+        type=float,
+        default=5.0,
+        help="mDNS discovery timeout in seconds (default: 5.0)",
+    )
     return parser.parse_args()
 
 
-def _build_session(device_count: int) -> requests.Session:
-    """Create a shared HTTP session with connection pooling."""
-    session = requests.Session()
-    adapter = HTTPAdapter(
-        pool_connections=device_count,
-        pool_maxsize=device_count * 2,
-        max_retries=0,  # We handle retries ourselves
-    )
-    # Tasmota devices only support HTTP; local network presumed trusted
-    session.mount("http://", adapter)
-    return session
+async def _run_with_glib_mainloop(devices, heartbeat_file, mainloop):
+    """Drive the asyncio main loop alongside the GLib D-Bus main loop."""
+    shutdown_event = asyncio.Event()
+    loop = asyncio.get_running_loop()
 
+    _register_signal_handlers(mainloop, shutdown_event, loop)
 
-def _create_inverters(
-    devices: list[tuple[str, int]], session: requests.Session
-) -> list["TasmotaPVInverter"]:
-    """Create TasmotaPVInverter instances for each configured device."""
-    inverters = []
-    for ip, instance in devices:
-        try:
-            inv = TasmotaPVInverter(ip, instance, session)
-            inverters.append(inv)
-        except Exception:
-            logger.exception(f"Failed to create inverter for {ip}")
-    return inverters
+    # The GLib main loop is only needed to service D-Bus (signal delivery,
+    # property change dispatch); run it in a background thread so it never
+    # blocks the asyncio event loop that drives polling.
+    glib_thread = threading.Thread(target=mainloop.run, daemon=True)
+    glib_thread.start()
 
-
-def _register_signal_handlers(mainloop) -> None:
-    """Register SIGTERM/SIGINT handlers for graceful shutdown."""
-
-    def graceful_shutdown(signum, frame):
-        """Handle shutdown signals gracefully"""
-        sig_name = signal.Signals(signum).name if hasattr(signal, "Signals") else str(signum)
-        logger.info(f"Received {sig_name}, shutting down gracefully...")
-        mainloop.quit()
-
-    signal.signal(signal.SIGTERM, graceful_shutdown)
-    signal.signal(signal.SIGINT, graceful_shutdown)
-
-
-def _write_heartbeat(heartbeat_file: str) -> None:
-    """Write the current time to the heartbeat file for the watchdog."""
     try:
-        with open(heartbeat_file, "w", encoding="utf-8") as f:
-            f.write(str(int(time())))
-    except OSError:
-        # Intentionally ignored: a failed heartbeat write should not crash the
-        # polling loop. The watchdog will detect the stale/missing file instead.
-        pass
-
-
-def _make_poll_fn(inverters: list["TasmotaPVInverter"], heartbeat_file: str):
-    """Build the periodic poll callback with memory management."""
-    state = {"gc_counter": 0}
-    gc_interval = 150  # Run GC every 150 polls (~5 minutes)
-
-    def poll():
-        """Periodic update with memory management"""
-        for inv in inverters:
-            try:
-                inv.update()
-            except Exception:
-                logger.exception("Error updating %s", inv.ip)
-
-        # Periodic garbage collection
-        state["gc_counter"] += 1
-        if state["gc_counter"] >= gc_interval:
-            state["gc_counter"] = 0
-            gc.collect()
-
-        _write_heartbeat(heartbeat_file)
-
-        return True
-
-    return poll
+        await _async_main(devices, heartbeat_file, shutdown_event)
+    finally:
+        if mainloop.is_running():
+            mainloop.quit()
+        glib_thread.join(timeout=5)
 
 
 def main():
     args = _parse_args()
-
-    logger.info(f"=== dbus-tasmota-pv v{VERSION} ===")
 
     devices = _load_devices(args)
 
@@ -347,39 +579,11 @@ def main():
     DBusGMainLoop(set_as_default=True)
     mainloop = GLib.MainLoop()
 
-    _register_signal_handlers(mainloop)
-
-    # Create shared HTTP session with connection pooling
-    session = _build_session(len(devices))
-
-    # Create inverter instances
-    inverters = _create_inverters(devices, session)
-
-    if not inverters:
-        logger.error("No inverters could be created")
-        session.close()
-        sys.exit(1)
-
     # Heartbeat file for watchdog
     heartbeat_file = "/run/dbus-tasmota-pv.alive"
 
-    # Start polling
-    poll = _make_poll_fn(inverters, heartbeat_file)
-    GLib.timeout_add(POLL_INTERVAL_MS, poll)
-
-    logger.info(f"Service started with {len(inverters)} inverter(s), entering main loop")
-
-    try:
-        mainloop.run()
-    except KeyboardInterrupt:
-        logger.info("KeyboardInterrupt received")
-    except Exception:
-        logger.exception("Unexpected error in main loop")
-    finally:
-        logger.info("Cleaning up...")
-        session.close()
-        gc.collect()
-        logger.info("Shutdown complete")
+    # Run async main
+    asyncio.run(_run_with_glib_mainloop(devices, heartbeat_file, mainloop))
 
 
 if __name__ == "__main__":
