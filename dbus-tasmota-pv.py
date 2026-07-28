@@ -244,11 +244,24 @@ class TasmotaPVInverter:
             return power, voltage, current, total
 
         except Exception as e:
-            # Check exception type by name since httpx may be mocked in tests
-            error_type = type(e).__name__
-            if error_type == "TimeoutException":
+            # Prefer isinstance checks against real httpx exception classes so that
+            # concrete subclasses (ConnectTimeout, ReadTimeout, PoolTimeout, etc.)
+            # are categorized correctly. Fall back to matching by class name since
+            # httpx may be mocked in tests (isinstance against a MagicMock attribute
+            # would raise TypeError).
+            timeout_exc = getattr(httpx, "TimeoutException", None)
+            connect_exc = getattr(httpx, "ConnectError", None)
+            is_timeout = isinstance(timeout_exc, type) and isinstance(e, timeout_exc)
+            is_connect_error = isinstance(connect_exc, type) and isinstance(e, connect_exc)
+
+            if not (is_timeout or is_connect_error):
+                error_type = type(e).__name__
+                is_timeout = error_type == "TimeoutException"
+                is_connect_error = error_type == "ConnectError"
+
+            if is_timeout:
                 self._handle_failure("timeout")
-            elif error_type == "ConnectError":
+            elif is_connect_error:
                 self._handle_failure("connection error")
             else:
                 self._handle_failure(str(e))
