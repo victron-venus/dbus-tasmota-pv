@@ -27,6 +27,7 @@ import gc
 import logging
 import signal
 import sys
+import threading
 from pathlib import Path
 from time import time
 from typing import Any
@@ -72,7 +73,7 @@ _PATH_AC_L1_CURRENT = "/Ac/L1/Current"
 _PATH_AC_ENERGY_FORWARD = "/Ac/Energy/Forward"
 
 # mDNS service type for Tasmota
-TASSOTA_MDNS_TYPE = "_tasmota._tcp.local."
+TASMOTA_MDNS_TYPE = "_tasmota._tcp.local."
 
 # Logging setup
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
@@ -108,7 +109,6 @@ class TasmotaMDNSDiscovery:
         self._found_devices: dict[str, str] = {}  # ip -> hostname
         self._browser = None
         self._zeroconf = None
-        self._event = asyncio.Event()
         self._resolving = set()
         self._tasks: set[asyncio.Task] = set()
 
@@ -141,7 +141,6 @@ class TasmotaMDNSDiscovery:
                 ip = ".".join(str(b) for b in info.addresses[0])
                 self._found_devices[ip] = name
                 logger.debug("Discovered Tasmota: %s at %s", name, ip)
-            self._event.set()
         except Exception as e:
             logger.debug("Failed to resolve service %s: %s", name, e)
         finally:
@@ -154,23 +153,24 @@ class TasmotaMDNSDiscovery:
             return {}
 
         self._found_devices = {}
-        self._event.clear()
 
         self._zeroconf = Zeroconf(ip_version=IPVersion.All)
         self._browser = ServiceBrowser(
             self._zeroconf,
-            TASSOTA_MDNS_TYPE,
+            TASMOTA_MDNS_TYPE,
             handlers=[self._on_service_state_change],
         )
 
-        # Wait for discovery to complete
-        try:
-            await asyncio.wait_for(self._event.wait(), timeout=self.timeout)
-        except asyncio.TimeoutError:
-            pass
-        finally:
-            if self._zeroconf:
-                self._zeroconf.close()
+        # Wait for the full timeout to allow all devices to be discovered
+        # and resolved (returning early would miss devices found later).
+        await asyncio.sleep(self.timeout)
+
+        # Give in-flight resolutions a chance to finish before closing.
+        while self._resolving:
+            await asyncio.sleep(0.1)
+
+        if self._zeroconf:
+            self._zeroconf.close()
 
         return self._found_devices
 
@@ -415,13 +415,11 @@ def _make_poll_fn(inverters: list[TasmotaPVInverter], heartbeat_file: str):
     return poll
 
 
-async def _async_main(devices: list[tuple[str, int]], heartbeat_file: str):
+async def _async_main(
+    devices: list[tuple[str, int]], heartbeat_file: str, shutdown_event: asyncio.Event
+):
     """Async main function."""
     logger.info(f"=== dbus-tasmota-pv v{VERSION} ===")
-
-    # Setup D-Bus main loop
-    DBusGMainLoop(set_as_default=True)
-    mainloop = GLib.MainLoop()
 
     # Create shared HTTP client with connection pooling
     client = AsyncHTTPClient(len(devices))
@@ -436,14 +434,20 @@ async def _async_main(devices: list[tuple[str, int]], heartbeat_file: str):
 
     # Start polling
     poll = _make_poll_fn(inverters, heartbeat_file)
-    GLib.timeout_add(POLL_INTERVAL_MS, lambda: asyncio.ensure_future(poll()))
 
     logger.info(f"Service started with {len(inverters)} inverter(s), entering main loop")
 
     try:
-        mainloop.run()
-    except KeyboardInterrupt:
-        logger.info("KeyboardInterrupt received")
+        while not shutdown_event.is_set():
+            try:
+                await asyncio.wait_for(
+                    shutdown_event.wait(), timeout=POLL_INTERVAL_MS / 1000
+                )
+            except asyncio.TimeoutError:
+                pass
+            if shutdown_event.is_set():
+                break
+            await poll()
     except Exception:
         logger.exception("Unexpected error in main loop")
     finally:
@@ -453,13 +457,14 @@ async def _async_main(devices: list[tuple[str, int]], heartbeat_file: str):
         logger.info("Shutdown complete")
 
 
-def _register_signal_handlers(mainloop) -> None:
+def _register_signal_handlers(mainloop, shutdown_event: asyncio.Event, loop) -> None:
     """Register SIGTERM/SIGINT handlers for graceful shutdown."""
 
     def graceful_shutdown(signum, frame):
         """Handle shutdown signals gracefully"""
         sig_name = signal.Signals(signum).name if hasattr(signal, "Signals") else str(signum)
         logger.info(f"Received {sig_name}, shutting down gracefully...")
+        loop.call_soon_threadsafe(shutdown_event.set)
         mainloop.quit()
 
     signal.signal(signal.SIGTERM, graceful_shutdown)
@@ -506,6 +511,27 @@ Examples:
     return parser.parse_args()
 
 
+async def _run_with_glib_mainloop(devices, heartbeat_file, mainloop):
+    """Drive the asyncio main loop alongside the GLib D-Bus main loop."""
+    shutdown_event = asyncio.Event()
+    loop = asyncio.get_running_loop()
+
+    _register_signal_handlers(mainloop, shutdown_event, loop)
+
+    # The GLib main loop is only needed to service D-Bus (signal delivery,
+    # property change dispatch); run it in a background thread so it never
+    # blocks the asyncio event loop that drives polling.
+    glib_thread = threading.Thread(target=mainloop.run, daemon=True)
+    glib_thread.start()
+
+    try:
+        await _async_main(devices, heartbeat_file, shutdown_event)
+    finally:
+        if mainloop.is_running():
+            mainloop.quit()
+        glib_thread.join(timeout=5)
+
+
 def main():
     args = _parse_args()
 
@@ -515,13 +541,11 @@ def main():
     DBusGMainLoop(set_as_default=True)
     mainloop = GLib.MainLoop()
 
-    _register_signal_handlers(mainloop)
-
     # Heartbeat file for watchdog
     heartbeat_file = "/run/dbus-tasmota-pv.alive"
 
     # Run async main
-    asyncio.run(_async_main(devices, heartbeat_file))
+    asyncio.run(_run_with_glib_mainloop(devices, heartbeat_file, mainloop))
 
 
 if __name__ == "__main__":
