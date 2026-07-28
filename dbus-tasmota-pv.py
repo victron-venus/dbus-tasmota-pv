@@ -270,7 +270,7 @@ class TasmotaPVInverter:
             is_timeout = isinstance(timeout_exc, type) and isinstance(e, timeout_exc)
             is_connect_error = isinstance(connect_exc, type) and isinstance(e, connect_exc)
 
-            if not (is_timeout or is_connect_error):
+            if not is_timeout and not is_connect_error:
                 error_type = type(e).__name__
                 is_timeout = error_type == "TimeoutException"
                 is_connect_error = error_type == "ConnectError"
