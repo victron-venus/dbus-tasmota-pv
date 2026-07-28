@@ -480,6 +480,8 @@ async def _async_main(
                     shutdown_event.wait(), timeout=POLL_INTERVAL_MS / 1000
                 )
             except asyncio.TimeoutError:
+                # Expected: wait_for times out every POLL_INTERVAL_MS when no
+                # shutdown signal has been received, so we just loop and poll.
                 pass
             if shutdown_event.is_set():
                 break
