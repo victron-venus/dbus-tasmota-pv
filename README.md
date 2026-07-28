@@ -36,6 +36,12 @@ This repository provides automated build archives for Victron Venus OS installat
 
 ---
 
+## Completed Features
+
+- ✅ **CI/CD Releases & Nightly Builds**: Installer packaging workflows configured for automated releases
+
+---
+
 ## Overview
 
 This script polls Tasmota smart plugs via HTTP and publishes power data to D-Bus as PV inverters. This allows Victron GX devices to see and display solar production from simple inline MPPT inverters that don't have native Victron integration.
