@@ -31,6 +31,7 @@ from pathlib import Path
 from time import time
 from typing import Any
 
+import anyio
 import httpx
 import yaml
 
@@ -110,6 +111,7 @@ class TasmotaMDNSDiscovery:
         self._zeroconf = None
         self._event = asyncio.Event()
         self._resolving = set()
+        self._loop: asyncio.AbstractEventLoop | None = None
 
     def _on_service_state_change(
         self,
@@ -118,9 +120,16 @@ class TasmotaMDNSDiscovery:
         name: str,
         state_change: ServiceStateChange,
     ) -> None:
-        """Handle service state changes."""
-        if state_change is ServiceStateChange.Added:
-            asyncio.create_task(self._resolve_service(zeroconf, service_type, name))
+        """Handle service state changes.
+
+        Called by zeroconf's ServiceBrowser from a background thread that has
+        no running asyncio event loop, so we must schedule the coroutine on
+        the main loop via a thread-safe API instead of asyncio.create_task.
+        """
+        if state_change is ServiceStateChange.Added and self._loop is not None:
+            asyncio.run_coroutine_threadsafe(
+                self._resolve_service(zeroconf, service_type, name), self._loop
+            )
 
     async def _resolve_service(self, zeroconf: Any, service_type: str, name: str) -> None:
         """Resolve service to get IP address."""
@@ -152,6 +161,7 @@ class TasmotaMDNSDiscovery:
 
         self._found_devices = {}
         self._event.clear()
+        self._loop = asyncio.get_running_loop()
 
         self._zeroconf = Zeroconf(ip_version=IPVersion.All)
         self._browser = ServiceBrowser(
@@ -160,7 +170,8 @@ class TasmotaMDNSDiscovery:
             handlers=[self._on_service_state_change],
         )
 
-        # Wait for discovery to complete
+        # Wait for the full timeout window so all responding devices are
+        # collected (not just the first one).
         try:
             await asyncio.wait_for(self._event.wait(), timeout=self.timeout)
         except asyncio.TimeoutError:
@@ -168,6 +179,7 @@ class TasmotaMDNSDiscovery:
         finally:
             if self._zeroconf:
                 self._zeroconf.close()
+            self._loop = None
 
         return self._found_devices
 
@@ -346,8 +358,8 @@ def _load_devices(args: argparse.Namespace) -> list[tuple[str, int]]:
                 logger.info(f"Discovered {len(devices)} Tasmota device(s): {devices}")
                 return devices
             logger.warning("No Tasmota devices discovered via mDNS")
-        except Exception as e:
-            logger.error(f"mDNS discovery failed: {e}")
+        except Exception:
+            logger.exception("mDNS discovery failed")
 
     if args.config.exists():
         devices = load_config(args.config)
@@ -361,7 +373,7 @@ def _load_devices(args: argparse.Namespace) -> list[tuple[str, int]]:
     sys.exit(1)
 
 
-async def _create_inverters(
+def _create_inverters(
     devices: list[tuple[str, int]], client: AsyncHTTPClient
 ) -> list[TasmotaPVInverter]:
     """Create TasmotaPVInverter instances for each configured device."""
@@ -375,7 +387,7 @@ async def _create_inverters(
     return inverters
 
 
-async def _make_poll_fn(inverters: list[TasmotaPVInverter], heartbeat_file: str):
+def _make_poll_fn(inverters: list[TasmotaPVInverter], heartbeat_file: str):
     """Build the periodic poll callback with memory management."""
     state = {"gc_counter": 0}
     gc_interval = 150  # Run GC every 150 polls (~5 minutes)
@@ -396,8 +408,7 @@ async def _make_poll_fn(inverters: list[TasmotaPVInverter], heartbeat_file: str)
 
         # Heartbeat for watchdog
         try:
-            with open(heartbeat_file, "w", encoding="utf-8") as f:
-                f.write(str(int(time())))
+            await anyio.Path(heartbeat_file).write_text(str(int(time())), encoding="utf-8")
         except OSError:
             # Intentionally ignored: failed heartbeat write should not crash polling
             pass
@@ -419,7 +430,7 @@ async def _async_main(devices: list[tuple[str, int]], heartbeat_file: str):
     client = AsyncHTTPClient(len(devices))
 
     # Create inverter instances
-    inverters = await _create_inverters(devices, client)
+    inverters = _create_inverters(devices, client)
 
     if not inverters:
         logger.error("No inverters could be created")
@@ -427,7 +438,7 @@ async def _async_main(devices: list[tuple[str, int]], heartbeat_file: str):
         sys.exit(1)
 
     # Start polling
-    poll = await _make_poll_fn(inverters, heartbeat_file)
+    poll = _make_poll_fn(inverters, heartbeat_file)
     GLib.timeout_add(POLL_INTERVAL_MS, lambda: asyncio.ensure_future(poll()))
 
     logger.info(f"Service started with {len(inverters)} inverter(s), entering main loop")
