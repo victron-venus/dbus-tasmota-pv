@@ -144,9 +144,17 @@ class TasmotaMDNSDiscovery:
                 timeout=2.0,
             )
             if info:
-                ip = ".".join(str(b) for b in info.addresses[0])
-                self._found_devices[ip] = name
-                logger.debug("Discovered Tasmota: %s at %s", name, ip)
+                # Use zeroconf's own address parsing instead of assuming a
+                # 4-byte IPv4 address is always present at index 0; this
+                # correctly handles IPv6-only responses and avoids IndexError
+                # when no addresses were resolved.
+                addresses = info.parsed_addresses(version=IPVersion.V4Only)
+                if not addresses:
+                    addresses = info.parsed_addresses(version=IPVersion.V6Only)
+                if addresses:
+                    ip = addresses[0]
+                    self._found_devices[ip] = name
+                    logger.debug("Discovered Tasmota: %s at %s", name, ip)
             self._event.set()
         except Exception as e:
             logger.debug("Failed to resolve service %s: %s", name, e)
@@ -171,11 +179,11 @@ class TasmotaMDNSDiscovery:
         )
 
         # Wait for the full timeout window so all responding devices are
-        # collected (not just the first one).
+        # collected (not just the first one). Note: self._event is set by
+        # _resolve_service on every resolution (not just the first), but we
+        # must not return as soon as it is set - sleep for the whole window.
         try:
-            await asyncio.wait_for(self._event.wait(), timeout=self.timeout)
-        except asyncio.TimeoutError:
-            pass
+            await asyncio.sleep(self.timeout)
         finally:
             if self._zeroconf:
                 self._zeroconf.close()
@@ -418,13 +426,16 @@ def _make_poll_fn(inverters: list[TasmotaPVInverter], heartbeat_file: str):
     return poll
 
 
-async def _async_main(devices: list[tuple[str, int]], heartbeat_file: str):
+async def _async_main(devices: list[tuple[str, int]], heartbeat_file: str, stop_event: asyncio.Event):
     """Async main function."""
     logger.info(f"=== dbus-tasmota-pv v{VERSION} ===")
 
-    # Setup D-Bus main loop
+    # Setup D-Bus main loop. GLib's main loop must not be run with
+    # mainloop.run() here since that would block the asyncio event loop and
+    # prevent polling from ever running. Instead we pump the GLib main
+    # context (non-blocking) alongside the asyncio polling loop below.
     DBusGMainLoop(set_as_default=True)
-    mainloop = GLib.MainLoop()
+    glib_context = GLib.MainContext.default()
 
     # Create shared HTTP client with connection pooling
     client = AsyncHTTPClient(len(devices))
@@ -437,14 +448,19 @@ async def _async_main(devices: list[tuple[str, int]], heartbeat_file: str):
         await client.close()
         sys.exit(1)
 
-    # Start polling
     poll = _make_poll_fn(inverters, heartbeat_file)
-    GLib.timeout_add(POLL_INTERVAL_MS, lambda: asyncio.ensure_future(poll()))
 
     logger.info(f"Service started with {len(inverters)} inverter(s), entering main loop")
 
     try:
-        mainloop.run()
+        while not stop_event.is_set():
+            while glib_context.pending():
+                glib_context.iteration(False)
+            await poll()
+            try:
+                await asyncio.wait_for(stop_event.wait(), timeout=POLL_INTERVAL_MS / 1000)
+            except asyncio.TimeoutError:
+                pass
     except KeyboardInterrupt:
         logger.info("KeyboardInterrupt received")
     except Exception:
@@ -456,14 +472,14 @@ async def _async_main(devices: list[tuple[str, int]], heartbeat_file: str):
         logger.info("Shutdown complete")
 
 
-def _register_signal_handlers(mainloop) -> None:
+def _register_signal_handlers(stop_event: asyncio.Event, loop: asyncio.AbstractEventLoop) -> None:
     """Register SIGTERM/SIGINT handlers for graceful shutdown."""
 
     def graceful_shutdown(signum, frame):
         """Handle shutdown signals gracefully"""
         sig_name = signal.Signals(signum).name if hasattr(signal, "Signals") else str(signum)
         logger.info(f"Received {sig_name}, shutting down gracefully...")
-        mainloop.quit()
+        loop.call_soon_threadsafe(stop_event.set)
 
     signal.signal(signal.SIGTERM, graceful_shutdown)
     signal.signal(signal.SIGINT, graceful_shutdown)
@@ -509,22 +525,23 @@ Examples:
     return parser.parse_args()
 
 
+async def _run(devices: list[tuple[str, int]], heartbeat_file: str) -> None:
+    """Set up the stop event/signal handlers and run the async main loop."""
+    stop_event = asyncio.Event()
+    _register_signal_handlers(stop_event, asyncio.get_running_loop())
+    await _async_main(devices, heartbeat_file, stop_event)
+
+
 def main():
     args = _parse_args()
 
     devices = _load_devices(args)
 
-    # Setup D-Bus main loop
-    DBusGMainLoop(set_as_default=True)
-    mainloop = GLib.MainLoop()
-
-    _register_signal_handlers(mainloop)
-
     # Heartbeat file for watchdog
     heartbeat_file = "/run/dbus-tasmota-pv.alive"
 
     # Run async main
-    asyncio.run(_async_main(devices, heartbeat_file))
+    asyncio.run(_run(devices, heartbeat_file))
 
 
 if __name__ == "__main__":
