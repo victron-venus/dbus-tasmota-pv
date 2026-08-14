@@ -39,6 +39,15 @@ scp "$SCRIPT_DIR/dbus-tasmota-pv.py" "$SSH_HOST:$REMOTE_DIR/"
 scp "$SCRIPT_DIR/install.sh" "$SSH_HOST:$REMOTE_DIR/"
 scp "$SCRIPT_DIR/config.example.json" "$SSH_HOST:$REMOTE_DIR/"
 
+# Deploy personal config (gitignored) if present, otherwise the example.
+# config.local.json is never committed; it holds your Tasmota device IPs.
+CONFIG_SRC="config.example.json"
+if [[ -f "$SCRIPT_DIR/config.local.json" ]]; then
+    CONFIG_SRC="config.local.json"
+    echo ">>> Using local config: $SCRIPT_DIR/config.local.json"
+fi
+scp "$SCRIPT_DIR/$CONFIG_SRC" "$SSH_HOST:$REMOTE_DIR/config.json"
+
 # Make executable
 ssh "$SSH_HOST" "chmod +x $REMOTE_DIR/*.py $REMOTE_DIR/install.sh"
 
