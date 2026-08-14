@@ -38,6 +38,15 @@ elif [[ -f "$INSTALL_DIR/dbus-tasmota-pv.py" ]]; then
     echo "Using existing $INSTALL_DIR/dbus-tasmota-pv.py"
 fi
 
+# Install default config if not present
+if [[ -f "config.example.json" ]] && [[ ! -f "$INSTALL_DIR/config.json" ]]; then
+    cp config.example.json "$INSTALL_DIR/config.json"
+    echo "Created default config at $INSTALL_DIR/config.json"
+    echo ">>> Edit $INSTALL_DIR/config.json to set your Tasmota device IPs!"
+elif [[ -f "$INSTALL_DIR/config.json" ]]; then
+    echo "Using existing $INSTALL_DIR/config.json"
+fi
+
 # Remove old symlink if exists and create proper directory
 if [[ -L "$SERVICE_DIR" ]]; then
     echo "Removing old symlink..."
@@ -54,11 +63,14 @@ if [[ ! -w "$LOG_DIR" ]]; then
     echo "Warning: Log directory $LOG_DIR is not writable" >&2
 fi
 
+# Clear stale error log from previous runs
+: > /var/log/dbus-tasmota-pv.log 2>/dev/null || true
+
 # Create run script (stderr to log file, stdout to /dev/null)
 cat > "$SERVICE_DIR/run" << 'EOF'
 #!/bin/sh
 cd /data/dbus-tasmota-pv
-exec python3 dbus-tasmota-pv.py 2>> /var/log/dbus-tasmota-pv.log > /dev/null
+exec python3 dbus-tasmota-pv.py --config /data/dbus-tasmota-pv/config.json 2>> /var/log/dbus-tasmota-pv.log > /dev/null
 EOF
 chmod +x "$SERVICE_DIR/run"
 
@@ -82,6 +94,15 @@ echo "  Stop:     svc -d /service/dbus-tasmota-pv"
 echo "  Errors:   tail -f /var/log/dbus-tasmota-pv.log"
 echo ""
 
+# Wait for daemontools to pick up the new service.  svscan polls /service
+# every ~5s, so svstat too early would fail with "unable to open
+# supervise/ok".  Poll for the FIFO that supervise creates on startup.
+for _ in $(seq 1 20); do
+    if [[ -p "$SERVICE_DIR/supervise/ok" ]]; then
+        break
+    fi
+    sleep 1
+done
+
 # Show service status
-sleep 1
 svstat "$SERVICE_DIR" 2>/dev/null || echo "Service starting..."

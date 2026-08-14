@@ -9,14 +9,14 @@ and publishes to Victron D-Bus as PV Inverter devices.
 
 Supports multiple Tasmota devices with individual polling.
 Features:
-- Async HTTP polling with httpx for non-blocking I/O
-- mDNS/SSDP auto-discovery of Tasmota devices
-- Connection pooling and graceful error handling
+- Async HTTP polling using only the Python standard library
+- mDNS/SSDP auto-discovery of Tasmota devices (optional zeroconf)
+- Graceful error handling
 
 Usage:
     ./dbus-tasmota-pv.py --devices 192.168.164.73:120 192.168.164.74:121
     ./dbus-tasmota-pv.py --discover  # Auto-discover Tasmota devices via mDNS
-    ./dbus-tasmota-pv.py --config /etc/dbus-tasmota-pv.yaml
+    ./dbus-tasmota-pv.py --config /etc/dbus-tasmota-pv.json
 
 Where each device is specified as IP:INSTANCE
 """
@@ -24,16 +24,16 @@ Where each device is specified as IP:INSTANCE
 import argparse
 import asyncio
 import gc
+import json
 import logging
 import signal
 import sys
 import threading
+import urllib.error
+import urllib.request
 from pathlib import Path
 from time import time
 from typing import Any
-
-import httpx
-import yaml
 
 # Optional mDNS discovery
 try:
@@ -80,25 +80,45 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(mess
 logger = logging.getLogger("TasmotaPV")
 
 
+class _StdlibResponse:
+    """Minimal HTTP response wrapper with ``raise_for_status()``/``json()``."""
+
+    def __init__(self, status: int, body: bytes) -> None:
+        self._status = status
+        self._body = body
+
+    def raise_for_status(self) -> None:
+        if self._status >= 400:
+            raise urllib.error.HTTPError(
+                url=None, code=self._status, msg="HTTP error", hdrs=None, fp=None
+            )
+
+    def json(self) -> Any:
+        return json.loads(self._body.decode("utf-8"))
+
+
 class AsyncHTTPClient:
-    """Async HTTP client wrapper with connection pooling."""
+    """Async HTTP client wrapper built on the standard library.
+
+    urllib has no async API, so each request runs in a worker thread via
+    ``asyncio.to_thread``; a semaphore keeps concurrent requests bounded.
+    """
 
     def __init__(self, max_connections: int):
-        self._client = httpx.AsyncClient(
-            timeout=httpx.Timeout(HTTP_TIMEOUT),
-            limits=httpx.Limits(
-                max_connections=max_connections,
-                max_keepalive_connections=max_connections * 2,
-            ),
-        )
+        self._semaphore = asyncio.Semaphore(max_connections)
 
-    async def get(self, url: str) -> httpx.Response:
-        """Async GET request."""
-        return await self._client.get(url)
+    async def get(self, url: str) -> _StdlibResponse:
+        """Perform a GET request (runs off the event loop)."""
+        async with self._semaphore:
+            return await asyncio.to_thread(self._request, url)
 
-    async def close(self):
-        """Close the client."""
-        await self._client.aclose()
+    @staticmethod
+    def _request(url: str) -> _StdlibResponse:
+        with urllib.request.urlopen(url, timeout=HTTP_TIMEOUT) as resp:
+            return _StdlibResponse(resp.getcode() or 200, resp.read())
+
+    async def close(self) -> None:
+        """No persistent connections to close."""
 
 
 class TasmotaMDNSDiscovery:
@@ -260,24 +280,14 @@ class TasmotaPVInverter:
             return power, voltage, current, total
 
         except Exception as e:
-            # Prefer isinstance checks against real httpx exception classes so that
-            # concrete subclasses (ConnectTimeout, ReadTimeout, PoolTimeout, etc.)
-            # are categorized correctly. Fall back to matching by class name since
-            # httpx may be mocked in tests (isinstance against a MagicMock attribute
-            # would raise TypeError).
-            timeout_exc = getattr(httpx, "TimeoutException", None)
-            connect_exc = getattr(httpx, "ConnectError", None)
-            is_timeout = isinstance(timeout_exc, type) and isinstance(e, timeout_exc)
-            is_connect_error = isinstance(connect_exc, type) and isinstance(e, connect_exc)
-
-            if not is_timeout and not is_connect_error:
-                error_type = type(e).__name__
-                is_timeout = error_type == "TimeoutException"
-                is_connect_error = error_type == "ConnectError"
-
-            if is_timeout:
+            # urllib wraps the underlying cause (socket.timeout,
+            # ConnectionRefusedError, ...) inside URLError.reason.
+            cause = getattr(e, "reason", None)
+            if cause is None:
+                cause = e
+            if isinstance(cause, TimeoutError):
                 self._handle_failure("timeout")
-            elif is_connect_error:
+            elif isinstance(cause, ConnectionError):
                 self._handle_failure("connection error")
             else:
                 self._handle_failure(str(e))
@@ -335,7 +345,7 @@ class TasmotaPVInverter:
 
 
 def load_config(config_path: Path) -> list[tuple[str, int]]:
-    """Load devices from YAML config file"""
+    """Load devices from a JSON config file."""
     # Validate path before opening (prevent path traversal via ..)
     try:
         config_path = config_path.resolve()
@@ -344,7 +354,7 @@ def load_config(config_path: Path) -> list[tuple[str, int]]:
     if not config_path.is_file():
         raise ValueError(f"Config path is not a file: {config_path}")
     with open(config_path, encoding="utf-8") as f:
-        config = yaml.safe_load(f)
+        config = json.load(f)
     devices = []
     for device in config.get("devices", []):
         ip = device.get("ip")
@@ -395,7 +405,7 @@ def _load_devices(args: argparse.Namespace) -> list[tuple[str, int]]:
 
     logger.error(f"No devices specified and config file not found: {args.config}")
     logger.info(
-        "Use --devices IP:INSTANCE, --discover, or create config file at /etc/dbus-tasmota-pv.yaml"
+        "Use --devices IP:INSTANCE, --discover, or create config file at /etc/dbus-tasmota-pv.json"
     )
     sys.exit(1)
 
@@ -476,10 +486,8 @@ async def _async_main(
     try:
         while not shutdown_event.is_set():
             try:
-                await asyncio.wait_for(
-                    shutdown_event.wait(), timeout=POLL_INTERVAL_MS / 1000
-                )
-            except asyncio.TimeoutError:
+                await asyncio.wait_for(shutdown_event.wait(), timeout=POLL_INTERVAL_MS / 1000)
+            except TimeoutError:
                 # Expected: wait_for times out every POLL_INTERVAL_MS when no
                 # shutdown signal has been received, so we just loop and poll.
                 pass
@@ -516,7 +524,7 @@ def _parse_args() -> argparse.Namespace:
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
-    ./dbus-tasmota-pv.py --config /etc/dbus-tasmota-pv.yaml
+    ./dbus-tasmota-pv.py --config /etc/dbus-tasmota-pv.json
     ./dbus-tasmota-pv.py -d 192.168.1.100:120 -d 192.168.1.101:121
     ./dbus-tasmota-pv.py --discover
     ./dbus-tasmota-pv.py --discover --discover-timeout 10
@@ -526,8 +534,8 @@ Examples:
         "-c",
         "--config",
         type=Path,
-        default=Path("/etc/dbus-tasmota-pv.yaml"),
-        help="Path to YAML config file",
+        default=Path("/etc/dbus-tasmota-pv.json"),
+        help="Path to JSON config file",
     )
     parser.add_argument(
         "-d",
