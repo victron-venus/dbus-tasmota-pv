@@ -1,20 +1,20 @@
 """Tests for dbus-tasmota-pv service.
 
 Covers:
-- load_config(): YAML parsing for valid/invalid/edge-case configs
+- load_config(): JSON parsing for valid/invalid/edge-case configs
 - _get_tasmota_data(): HTTP response parsing (power, voltage, current, total)
 - _handle_failure(): degradation after N consecutive failures
 """
 # pylint: disable=protected-access  # tests intentionally access internals
 
 import importlib.util
+import json
 import sys
 from pathlib import Path
 from types import ModuleType
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
-import yaml
 
 # ---------------------------------------------------------------------------
 # Mock Venus OS dependencies before importing the service module.
@@ -42,7 +42,6 @@ _spec.loader.exec_module(_mod)
 # Patch Venus OS symbols that were set to None during module load
 _mod.dbus = MagicMock()
 _mod.VeDbusService = MagicMock()
-_mod.httpx = MagicMock()
 
 TasmotaPVInverter = _mod.TasmotaPVInverter
 load_config = _mod.load_config
@@ -55,7 +54,7 @@ MAX_CONSECUTIVE_FAILURES = 5
 # ---------------------------------------------------------------------------
 
 
-def _make_inverter(ip: str = "10.0.0.1", instance: int = 120) -> TasmotaPVInverter:  # noqa: S104
+def _make_inverter(ip: str = "10.0.0.1", instance: int = 120) -> TasmotaPVInverter:
     """Create a TasmotaPVInverter with all D-Bus interactions mocked."""
     client = MagicMock()
     response = MagicMock()
@@ -73,16 +72,16 @@ def _make_inverter(ip: str = "10.0.0.1", instance: int = 120) -> TasmotaPVInvert
 
 
 class TestLoadConfig:
-    """load_config() — YAML config parsing."""
+    """load_config() — JSON config parsing."""
 
     def test_valid_config(self, tmp_path: Path) -> None:
-        cfg = tmp_path / "cfg.yaml"
+        cfg = tmp_path / "cfg.json"
         cfg.write_text(
-            yaml.dump(
+            json.dumps(
                 {
                     "devices": [
-                        {"ip": "10.0.0.1", "instance": 120},  # noqa: S104
-                        {"ip": "10.0.0.2", "instance": 121},  # noqa: S104
+                        {"ip": "10.0.0.1", "instance": 120},
+                        {"ip": "10.0.0.2", "instance": 121},
                     ]
                 }
             )
@@ -90,40 +89,40 @@ class TestLoadConfig:
         assert load_config(cfg) == [("10.0.0.1", 120), ("10.0.0.2", 121)]
 
     def test_empty_devices(self, tmp_path: Path) -> None:
-        cfg = tmp_path / "cfg.yaml"
-        cfg.write_text(yaml.dump({"devices": []}))
+        cfg = tmp_path / "cfg.json"
+        cfg.write_text(json.dumps({"devices": []}))
         assert load_config(cfg) == []
 
     def test_missing_devices_key(self, tmp_path: Path) -> None:
-        cfg = tmp_path / "cfg.yaml"
-        cfg.write_text(yaml.dump({"other_key": True}))
+        cfg = tmp_path / "cfg.json"
+        cfg.write_text(json.dumps({"other_key": True}))
         assert load_config(cfg) == []
 
     def test_device_missing_ip(self, tmp_path: Path) -> None:
-        cfg = tmp_path / "cfg.yaml"
-        cfg.write_text(yaml.dump({"devices": [{"instance": 120}]}))
+        cfg = tmp_path / "cfg.json"
+        cfg.write_text(json.dumps({"devices": [{"instance": 120}]}))
         assert load_config(cfg) == []
 
     def test_device_missing_instance(self, tmp_path: Path) -> None:
-        cfg = tmp_path / "cfg.yaml"
-        cfg.write_text(yaml.dump({"devices": [{"ip": "10.0.0.1"}]}))  # noqa: S104
+        cfg = tmp_path / "cfg.json"
+        cfg.write_text(json.dumps({"devices": [{"ip": "10.0.0.1"}]}))
         assert load_config(cfg) == []
 
     def test_instance_zero_accepted(self, tmp_path: Path) -> None:
-        cfg = tmp_path / "cfg.yaml"
-        cfg.write_text(yaml.dump({"devices": [{"ip": "10.0.0.1", "instance": 0}]}))  # noqa: S104
+        cfg = tmp_path / "cfg.json"
+        cfg.write_text(json.dumps({"devices": [{"ip": "10.0.0.1", "instance": 0}]}))
         assert load_config(cfg) == [("10.0.0.1", 0)]
 
     def test_non_integer_instance_raises(self, tmp_path: Path) -> None:
-        cfg = tmp_path / "cfg.yaml"
-        cfg.write_text(yaml.dump({"devices": [{"ip": "10.0.0.1", "instance": "abc"}]}))  # noqa: S104
+        cfg = tmp_path / "cfg.json"
+        cfg.write_text(json.dumps({"devices": [{"ip": "10.0.0.1", "instance": "abc"}]}))
         with pytest.raises(ValueError):
             load_config(cfg)
 
-    def test_invalid_yaml_raises(self, tmp_path: Path) -> None:
-        cfg = tmp_path / "cfg.yaml"
-        cfg.write_text("{{{{invalid yaml")
-        with pytest.raises(yaml.YAMLError):
+    def test_invalid_json_raises(self, tmp_path: Path) -> None:
+        cfg = tmp_path / "cfg.json"
+        cfg.write_text("{{{{invalid")
+        with pytest.raises(json.JSONDecodeError):
             load_config(cfg)
 
 

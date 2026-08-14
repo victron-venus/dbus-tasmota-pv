@@ -37,6 +37,16 @@ ssh "$SSH_HOST" "mkdir -p $REMOTE_DIR"
 echo ">>> Copying files..."
 scp "$SCRIPT_DIR/dbus-tasmota-pv.py" "$SSH_HOST:$REMOTE_DIR/"
 scp "$SCRIPT_DIR/install.sh" "$SSH_HOST:$REMOTE_DIR/"
+scp "$SCRIPT_DIR/config.example.json" "$SSH_HOST:$REMOTE_DIR/"
+
+# Deploy personal config (gitignored) if present, otherwise the example.
+# config.local.json is never committed; it holds your Tasmota device IPs.
+CONFIG_SRC="config.example.json"
+if [[ -f "$SCRIPT_DIR/config.local.json" ]]; then
+    CONFIG_SRC="config.local.json"
+    echo ">>> Using local config: $SCRIPT_DIR/config.local.json"
+fi
+scp "$SCRIPT_DIR/$CONFIG_SRC" "$SSH_HOST:$REMOTE_DIR/config.json"
 
 # Make executable
 ssh "$SSH_HOST" "chmod +x $REMOTE_DIR/*.py $REMOTE_DIR/install.sh"
@@ -49,10 +59,18 @@ if ! ssh "$SSH_HOST" "cd $REMOTE_DIR && ./install.sh"; then
     exit 1
 fi
 
-# Show status
+# Show status (wait for supervise to create its status file, svscan polls /service every ~5s)
 echo ""
 echo ">>> Service status:"
-ssh "$SSH_HOST" "sleep 2 && svstat /service/dbus-tasmota-pv"
+ssh "$SSH_HOST" "
+    for i in \$(seq 1 20); do
+        if [ -p /service/dbus-tasmota-pv/supervise/ok ]; then
+            break
+        fi
+        sleep 1
+    done
+    svstat /service/dbus-tasmota-pv
+"
 
 echo ""
 echo "$SEPARATOR"

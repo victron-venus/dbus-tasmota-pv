@@ -65,7 +65,40 @@ flowchart TB
 
 ## Configuration
 
-Configure devices via command line arguments:
+The installed service reads its device list from `/data/dbus-tasmota-pv/config.json`
+(created from `config.example.json` on first install). Edit that file and
+restart the service to apply changes:
+
+```json
+{
+  "devices": [
+    {"ip": "192.168.1.100", "instance": 120},
+    {"ip": "192.168.1.101", "instance": 121}
+  ]
+}
+```
+
+```bash
+ssh Cerbo "svc -t /service/dbus-tasmota-pv"
+```
+
+### Local (gitignored) config for `deploy.sh`
+
+`deploy.sh` automatically deploys your personal device list from a gitignored
+file `config.local.json` in the repo root (so your IPs never get committed).
+If the file is absent, the example config is used instead:
+
+```bash
+# config.local.json (gitignored) — deployed as /data/dbus-tasmota-pv/config.json
+{
+  "devices": [
+    {"ip": "192.168.1.100", "instance": 120},
+    {"ip": "192.168.1.101", "instance": 121}
+  ]
+}
+```
+
+Devices can also be configured via command line arguments (overrides the config file):
 
 ```bash
 # Format: IP:INSTANCE
