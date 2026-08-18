@@ -1,5 +1,4 @@
 #!/usr/bin/env python3
-# -*- coding: utf-8 -*-
 """
 dbus-tasmota-pv - Tasmota Energy Meter to D-Bus PV Inverter Bridge
 ===================================================================
@@ -48,10 +47,10 @@ except ImportError:
 VELIB_PATH = Path("/opt/victronenergy/dbus-systemcalc-py/ext/velib_python")
 if VELIB_PATH.exists():
     sys.path.insert(0, str(VELIB_PATH))
-    from vedbus import VeDbusService  # type: ignore[attr-defined]
     import dbus  # type: ignore[attr-defined]
     from dbus.mainloop.glib import DBusGMainLoop  # type: ignore[attr-defined]
     from gi.repository import GLib  # type: ignore[attr-defined]
+    from vedbus import VeDbusService  # type: ignore[attr-defined]
 else:
     VeDbusService = None
     dbus = None
@@ -71,6 +70,7 @@ _PATH_AC_L1_POWER = "/Ac/L1/Power"
 _PATH_AC_L1_VOLTAGE = "/Ac/L1/Voltage"
 _PATH_AC_L1_CURRENT = "/Ac/L1/Current"
 _PATH_AC_ENERGY_FORWARD = "/Ac/Energy/Forward"
+_PATH_AC_ENERGY_DAILY = "/Ac/Energy/Daily"
 
 # mDNS service type for Tasmota
 TASMOTA_MDNS_TYPE = "_tasmota._tcp.local."
@@ -161,7 +161,7 @@ class TasmotaMDNSDiscovery:
                 ip = ".".join(str(b) for b in info.addresses[0])
                 self._found_devices[ip] = name
                 logger.debug("Discovered Tasmota: %s at %s", name, ip)
-        except Exception as e:
+        except (OSError, AttributeError) as e:
             logger.debug("Failed to resolve service %s: %s", name, e)
         finally:
             self._resolving.discard(name)
@@ -236,6 +236,7 @@ class TasmotaPVInverter:
         self._dbusservice.add_path(_PATH_AC_L1_VOLTAGE, 115.0)
         self._dbusservice.add_path(_PATH_AC_L1_CURRENT, 0.0)
         self._dbusservice.add_path(_PATH_AC_ENERGY_FORWARD, 0.0)
+        self._dbusservice.add_path(_PATH_AC_ENERGY_DAILY, 0.0)
 
         self._dbusservice.register()
         logger.info(f"Registered PV Inverter: {service_name} (IP: {ip_address})")
@@ -256,7 +257,7 @@ class TasmotaPVInverter:
 
         GLib.idle_add(_apply)
 
-    async def _get_tasmota_data(self) -> tuple[float, float, float, float] | None:
+    async def _get_tasmota_data(self) -> tuple[float, float, float, float, float] | None:
         """Fetch energy data from Tasmota device"""
         try:
             response = await self._client.get(f"http://{self.ip}/cm?cmnd=Status%208")
@@ -267,6 +268,7 @@ class TasmotaPVInverter:
             power = float(energy.get("Power", 0.0))
             voltage = float(energy.get("Voltage", 115.0))
             total = float(energy.get("Total", 0.0))
+            today = float(energy.get("Today", 0.0))
             current = round(power / voltage, 2) if voltage > 0 else 0.0
 
             # Reset failure counter on success
@@ -277,9 +279,9 @@ class TasmotaPVInverter:
                 self._connected = True
                 logger.info(f"Tasmota {self.ip} reconnected")
 
-            return power, voltage, current, total
+            return power, voltage, current, total, today
 
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001
             # urllib wraps the underlying cause (socket.timeout,
             # ConnectionRefusedError, ...) inside URLError.reason.
             cause = getattr(e, "reason", None)
@@ -329,7 +331,7 @@ class TasmotaPVInverter:
                 self._set_paths({_PATH_ERROR_CODE: 0, _PATH_CONNECTED: 1})
             return
 
-        power, voltage, current, total = result
+        power, voltage, current, total, today = result
 
         self._set_paths(
             {
@@ -340,6 +342,7 @@ class TasmotaPVInverter:
                 _PATH_AC_L1_VOLTAGE: voltage,
                 _PATH_AC_L1_CURRENT: current,
                 _PATH_AC_ENERGY_FORWARD: total,
+                _PATH_AC_ENERGY_DAILY: today,
             }
         )
 
