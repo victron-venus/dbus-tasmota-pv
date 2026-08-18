@@ -161,7 +161,7 @@ class TasmotaMDNSDiscovery:
                 ip = ".".join(str(b) for b in info.addresses[0])
                 self._found_devices[ip] = name
                 logger.debug("Discovered Tasmota: %s at %s", name, ip)
-        except (TimeoutError, OSError, AttributeError) as e:
+        except (OSError, AttributeError) as e:
             logger.debug("Failed to resolve service %s: %s", name, e)
         finally:
             self._resolving.discard(name)
