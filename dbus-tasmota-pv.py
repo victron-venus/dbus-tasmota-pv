@@ -221,6 +221,8 @@ class TasmotaPVInverter:
         self._dbusservice.add_path("/Mgmt/ProcessName", "dbus-tasmota-pv.py")
         self._dbusservice.add_path("/Mgmt/ProcessVersion", VERSION)
         self._dbusservice.add_path("/ProductName", f"Solar Tasmota {ip_address}")
+        self._dbusservice.add_path("/CustomName", f"Solar Tasmota {ip_address}")
+        self._dbusservice.add_path("/Serial", f"TASMOTA-{instance}")
         self._dbusservice.add_path(_PATH_CONNECTED, 1)
         self._dbusservice.add_path("/DeviceInstance", instance)
         self._dbusservice.add_path("/ProductId", 0xA144)  # Standard PV Inverter ID
