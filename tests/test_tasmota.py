@@ -146,38 +146,42 @@ class TestParseTasmotaResponse:
     async def test_normal_values(self) -> None:
         inv = _make_inverter()
         inv._client.get.return_value.json.return_value = {
-            "StatusSNS": {"ENERGY": {"Power": 123.4, "Voltage": 230.1, "Total": 5678.9}}
+            "StatusSNS": {
+                "ENERGY": {"Power": 123.4, "Voltage": 230.1, "Total": 5678.9, "Today": 12.5}
+            }
         }
         inv._client.get.return_value.raise_for_status = MagicMock()
         result = await inv._get_tasmota_data()
         assert result is not None
-        power, voltage, current, total = result
+        power, voltage, current, total, today = result
         assert power == pytest.approx(123.4)
         assert voltage == pytest.approx(230.1)
         assert current == pytest.approx(0.54, rel=0.01)  # 123.4/230.1 ≈ 0.54
         assert total == pytest.approx(5678.9)
+        assert today == pytest.approx(12.5)
 
     @pytest.mark.asyncio
     async def test_missing_power_defaults_zero(self) -> None:
         inv = _make_inverter()
         inv._client.get.return_value.json.return_value = {
-            "StatusSNS": {"ENERGY": {"Voltage": 230, "Total": 100}}
+            "StatusSNS": {"ENERGY": {"Voltage": 230, "Total": 100, "Today": 5.0}}
         }
         inv._client.get.return_value.raise_for_status = MagicMock()
-        power, voltage, current, total = await inv._get_tasmota_data()
+        power, voltage, current, total, today = await inv._get_tasmota_data()
         assert power == pytest.approx(0.0)
         assert voltage == pytest.approx(230.0)
         assert current == pytest.approx(0.0)
         assert total == pytest.approx(100.0)
+        assert today == pytest.approx(5.0)
 
     @pytest.mark.asyncio
     async def test_missing_voltage_defaults_115(self) -> None:
         inv = _make_inverter()
         inv._client.get.return_value.json.return_value = {
-            "StatusSNS": {"ENERGY": {"Power": 100, "Total": 50}}
+            "StatusSNS": {"ENERGY": {"Power": 100, "Total": 50, "Today": 2.5}}
         }
         inv._client.get.return_value.raise_for_status = MagicMock()
-        power, voltage, current, _total = await inv._get_tasmota_data()
+        power, voltage, current, _total, _today = await inv._get_tasmota_data()
         assert power == pytest.approx(100.0)
         assert voltage == pytest.approx(115.0)
         assert current == pytest.approx(0.87, rel=0.01)  # 100/115 ≈ 0.87
@@ -186,25 +190,27 @@ class TestParseTasmotaResponse:
     async def test_zero_voltage_no_division_error(self) -> None:
         inv = _make_inverter()
         inv._client.get.return_value.json.return_value = {
-            "StatusSNS": {"ENERGY": {"Power": 100, "Voltage": 0, "Total": 50}}
+            "StatusSNS": {"ENERGY": {"Power": 100, "Voltage": 0, "Total": 50, "Today": 1.0}}
         }
         inv._client.get.return_value.raise_for_status = MagicMock()
-        power, voltage, current, total = await inv._get_tasmota_data()
+        power, voltage, current, total, today = await inv._get_tasmota_data()
         assert power == pytest.approx(100.0)
         assert voltage == pytest.approx(0.0)
         assert current == pytest.approx(0.0)
         assert total == pytest.approx(50.0)
+        assert today == pytest.approx(1.0)
 
     @pytest.mark.asyncio
     async def test_empty_energy_dict(self) -> None:
         inv = _make_inverter()
         inv._client.get.return_value.json.return_value = {"StatusSNS": {"ENERGY": {}}}
         inv._client.get.return_value.raise_for_status = MagicMock()
-        power, voltage, current, total = await inv._get_tasmota_data()
+        power, voltage, current, total, today = await inv._get_tasmota_data()
         assert power == pytest.approx(0.0)
         assert voltage == pytest.approx(115.0)
         assert current == pytest.approx(0.0)
         assert total == pytest.approx(0.0)
+        assert today == pytest.approx(0.0)
 
     @pytest.mark.asyncio
     async def test_missing_statussns_returns_none(self) -> None:
@@ -268,7 +274,7 @@ class TestHandleFailure:
         assert inv._consecutive_failures == 3
         # Simulate successful fetch
         inv._client.get.return_value.json.return_value = {
-            "StatusSNS": {"ENERGY": {"Power": 100, "Voltage": 230, "Total": 50}}
+            "StatusSNS": {"ENERGY": {"Power": 100, "Voltage": 230, "Total": 50, "Today": 2.5}}
         }
         inv._client.get.return_value.raise_for_status = MagicMock()
         await inv._get_tasmota_data()
@@ -289,7 +295,7 @@ class TestHandleFailure:
             inv._handle_failure("timeout")
         # Reset via success
         inv._client.get.return_value.json.return_value = {
-            "StatusSNS": {"ENERGY": {"Power": 50, "Voltage": 230, "Total": 20}}
+            "StatusSNS": {"ENERGY": {"Power": 50, "Voltage": 230, "Total": 20, "Today": 1.0}}
         }
         inv._client.get.return_value.raise_for_status = MagicMock()
         await inv._get_tasmota_data()
