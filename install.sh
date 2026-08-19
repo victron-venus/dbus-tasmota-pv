@@ -53,9 +53,10 @@ if [[ -L "$SERVICE_DIR" ]]; then
     rm -f "$SERVICE_DIR"
 fi
 
-# Create service directory structure
-echo ">>> Setting up daemontools service..."
-mkdir -p "$SERVICE_DIR"
+# Create service directory structure in /data (persists across reboots)
+SERVICE_DATA_DIR="/data/dbus-tasmota-pv/service/dbus-tasmota-pv"
+echo ">>> Setting up daemontools service in $SERVICE_DATA_DIR..."
+mkdir -p "$SERVICE_DATA_DIR"
 mkdir -p "$LOG_DIR"
 
 # Verify log directory is writable
@@ -66,18 +67,44 @@ fi
 # Clear stale error log from previous runs
 : > /var/log/dbus-tasmota-pv.log 2>/dev/null || true
 
-# Create run script (stderr to log file, stdout to /dev/null)
-cat > "$SERVICE_DIR/run" << 'EOF'
+# Create run script in /data (stderr to log file, stdout to /dev/null)
+cat > "$SERVICE_DATA_DIR/run" << 'EOF'
 #!/bin/sh
 cd /data/dbus-tasmota-pv
 exec python3 dbus-tasmota-pv.py --config /data/dbus-tasmota-pv/config.json 2>> /var/log/dbus-tasmota-pv.log > /dev/null
 EOF
-chmod +x "$SERVICE_DIR/run"
+chmod +x "$SERVICE_DATA_DIR/run"
+
+# Create /service symlink (will be recreated by rc.local on boot)
+ln -sf "$SERVICE_DATA_DIR" "$SERVICE_DIR"
 
 echo "Created service at $SERVICE_DIR"
 echo ""
-echo "Note: daemontools will automatically start this service on boot."
-echo "No rc.local modification needed."
+
+# Add rc.local entry for boot persistence
+RC_LOCAL="/data/rc.local"
+if [ ! -f "$RC_LOCAL" ]; then
+    echo "#!/bin/sh" > "$RC_LOCAL"
+    chmod +x "$RC_LOCAL"
+fi
+
+if ! grep -q "dbus-tasmota-pv" "$RC_LOCAL" 2>/dev/null; then
+    cat >> "$RC_LOCAL" << 'EOF'
+
+# === dbus-tasmota-pv service persistence ===
+# Recreate /service symlink on boot (lost since /service is tmpfs)
+ln -sf /data/dbus-tasmota-pv/service/dbus-tasmota-pv /service/dbus-tasmota-pv
+sleep 2
+svc -u /service/dbus-tasmota-pv 2>/dev/null || true
+# === end dbus-tasmota-pv ===
+
+EOF
+    echo "Added boot persistence to $RC_LOCAL"
+else
+    echo "Boot persistence already configured in $RC_LOCAL"
+fi
+
+echo "Note: Service will auto-start on boot via rc.local."
 
 echo ""
 echo "$SEPARATOR"
@@ -85,7 +112,7 @@ echo "  Installation Complete!"
 echo "$SEPARATOR"
 echo ""
 echo "Service will start automatically now and on reboot."
-echo "(daemontools handles auto-start, no rc.local needed)"
+echo "(rc.local recreates /service symlink on boot since /service is tmpfs)"
 echo ""
 echo "Commands:"
 echo "  Status:   svstat /service/dbus-tasmota-pv"
