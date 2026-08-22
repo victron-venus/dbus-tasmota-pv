@@ -73,7 +73,13 @@ exec python3 dbus-tasmota-pv.py 2>> /var/log/dbus-tasmota-pv.log > /dev/null
 EOF
 chmod +x "$SERVICE_DATA_DIR/run"
 
-# Create /service symlink (will be recreated by rc.local on boot)
+# Create /service symlink (will be recreated by rc.local on boot).
+# A pre-3.0 install left a real directory at $SERVICE_DIR; `ln -sf` cannot
+# replace it, leaving the old run script crashlooping. Move it aside instead.
+if [[ -d "$SERVICE_DIR" && ! -L "$SERVICE_DIR" ]]; then
+    echo ">>> Replacing legacy service directory at $SERVICE_DIR..."
+    mv "$SERVICE_DIR" "${SERVICE_DIR}.old.$(date +%s)"
+fi
 ln -sf "$SERVICE_DATA_DIR" "$SERVICE_DIR"
 
 echo "Created service at $SERVICE_DIR"
