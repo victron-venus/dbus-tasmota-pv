@@ -1,6 +1,6 @@
 {
   "devices": [
-    {"ip": "192.168.1.100", "instance": 120},
-    {"ip": "192.168.1.101", "instance": 121}
+    {"topic": "tasmota_120", "instance": 120},
+    {"topic": "tasmota_121", "instance": 121}
   ]
 }

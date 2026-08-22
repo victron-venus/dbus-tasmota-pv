@@ -44,24 +44,26 @@ This repository provides automated build archives for Victron Venus OS installat
 
 ## Overview
 
-This script polls Tasmota smart plugs via HTTP and publishes power data to D-Bus as PV inverters. This allows Victron GX devices to see and display solar production from simple inline MPPT inverters that don't have native Victron integration.
+This script subscribes to MQTT telemetry pushed by Tasmota smart plugs and publishes power data to D-Bus as PV inverters. This allows Victron GX devices to see and display solar production from simple inline MPPT inverters that don't have native Victron integration.
 
 ```mermaid
 flowchart TB
     SP[Solar Panel] --> MPPT[Inline MPPT Inverter]
     MPPT --> TP[Tasmota Smart Plug]
     TP --> GRID[AC Grid]
-    TP --> SCRIPT[dbus-tasmota-pv on Cerbo GX<br/>via HTTP polling]
+    TP -- tele/&lt;topic&gt;/SENSOR --> BROKER[Venus OS broker<br/>FlashMQ 127.0.0.1:1883]
+    BROKER --> SCRIPT[dbus-tasmota-pv<br/>MQTT subscription]
     SCRIPT --> GUI[Victron GUI / VRM<br/>via D-Bus]
 ```
 
 ## Features
 
-- Polls Tasmota smart plugs every 2 seconds
+- Push-based: plugs publish telemetry, no HTTP polling
 - Reports power, voltage, current, and total energy
 - Each plug appears as a separate PV inverter in Victron GUI
 - Shows in VRM portal as PV production
-- Minimal resource usage
+- Auto-reconnect and staleness detection (offline after 90s without data)
+- Uses paho-mqtt preinstalled on Venus OS 3.x (no pip needed)
 
 ## Configuration
 
@@ -72,8 +74,8 @@ restart the service to apply changes:
 ```json
 {
   "devices": [
-    {"ip": "192.168.1.100", "instance": 120},
-    {"ip": "192.168.1.101", "instance": 121}
+    {"topic": "tasmota_120", "instance": 120},
+    {"topic": "tasmota_121", "instance": 121}
   ]
 }
 ```
@@ -92,8 +94,8 @@ If the file is absent, the example config is used instead:
 # config.local.json (gitignored) — deployed as /data/dbus-tasmota-pv/config.json
 {
   "devices": [
-    {"ip": "192.168.1.100", "instance": 120},
-    {"ip": "192.168.1.101", "instance": 121}
+    {"topic": "tasmota_120", "instance": 120},
+    {"topic": "tasmota_121", "instance": 121}
   ]
 }
 ```
@@ -101,27 +103,22 @@ If the file is absent, the example config is used instead:
 Devices can also be configured via command line arguments (overrides the config file):
 
 ```bash
-# Format: IP:INSTANCE
-./dbus-tasmota-pv.py --devices 192.168.1.100:120 192.168.1.101:121
-```
-
-Or edit the service run script `/service/dbus-tasmota-pv/run`:
-
-```bash
-#!/bin/sh
-cd /data/dbus-tasmota-pv
-exec python3 dbus-tasmota-pv.py --devices 192.168.164.73:120 192.168.164.74:121
+# Format: TOPIC:INSTANCE (plug publishes tele/TOPIC/SENSOR)
+./dbus-tasmota-pv.py --devices tasmota_120:120 tasmota_121:121
 ```
 
 Parameters:
-- IP address: Tasmota plug IP
+- Topic: MQTT topic of the Tasmota plug (Tasmota `Topic` setting)
 - Instance: D-Bus device instance (unique number, 120-199 recommended)
+
+Broker defaults to `127.0.0.1:1883` (the Venus OS broker); override with `--mqtt-host` / `--mqtt-port` when running off-device.
 
 ## Requirements
 
 - Venus OS (Cerbo GX, Venus GX, Raspberry Pi with Venus OS)
 - Tasmota smart plugs with energy monitoring (e.g., Sonoff S31, Athom)
-- Network access from GX device to Tasmota plugs
+- Tasmota plugs configured to publish MQTT to the Venus OS broker (see below)
+- paho-mqtt (preinstalled on Venus OS 3.x)
 
 ## Installation
 
@@ -213,13 +210,17 @@ tail -f /var/log/dbus-tasmota-pv/current | tai64nlocal
 
 ## Tasmota Setup
 
-1. Flash your smart plug with Tasmota
-2. Configure WiFi and connect to your network
-3. Enable energy monitoring if not already enabled
-4. Note the IP address (Settings → Information)
-5. Test by accessing: `http://PLUG_IP/cm?cmnd=Status%208`
+Point each plug at the Venus OS broker and give it a unique topic:
 
-You should see JSON with ENERGY data including Power, Voltage, Current, Total.
+```bash
+# From any machine on the LAN (GX_IP = your Venus OS device)
+curl 'http://PLUG_IP/cm?cmnd=Backlog%20MqttHost%20GX_IP%3B%20MqttPort%201883%3B%20Topic%20tasmota_120%3B%20SetOption19%200%3B%20TelePeriod%2060%3B%20SensorRetain%201'
+```
+
+- `Topic tasmota_120`: unique topic per plug; must match the driver config
+- `SetOption19 0`: disable Home Assistant discovery publishing
+- `TelePeriod 60`: push telemetry every 60 seconds
+- `SensorRetain 1`: broker keeps last reading (driver gets data immediately after restart)
 
 ## Troubleshooting
 
@@ -268,8 +269,11 @@ cat /var/log/dbus-tasmota-pv/current | tai64nlocal | tail -20
 
 ### No data from Tasmota
 ```bash
-# Test HTTP connection from Venus OS
-curl 'http://192.168.164.73/cm?cmnd=Status%208'
+# Check telemetry arrives on the Venus OS broker
+mosquitto_sub -h 127.0.0.1 -t 'tele/+/SENSOR' -C 1
+
+# Check plug-side MQTT config
+curl 'http://PLUG_IP/cm?cmnd=Status%203'
 ```
 
 ### Service doesn't survive reboot
@@ -330,7 +334,7 @@ MIT License
 ## Support
 
 For issues specific to:
-- **Tasmota devices**: Check device is on same network and HTTP API accessible
+- **Tasmota devices**: Check device is on same network and MQTT broker reachable
 - **D-Bus integration**: Verify D-Bus service registration
 - **Power readings**: Ensure energy monitoring enabled in Tasmota
 - **This project**: Open an issue in this repository

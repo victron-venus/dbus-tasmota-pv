@@ -3,45 +3,44 @@
 dbus-tasmota-pv - Tasmota Energy Meter to D-Bus PV Inverter Bridge
 ===================================================================
 
-Reads power data from Tasmota smart plugs (with energy monitoring)
-and publishes to Victron D-Bus as PV Inverter devices.
+Reads power data that Tasmota smart plugs (with energy monitoring) push to
+MQTT (``tele/<topic>/SENSOR``) and publishes it to Victron D-Bus as PV
+Inverter devices.
 
-Supports multiple Tasmota devices with individual polling.
-Features:
-- Async HTTP polling using only the Python standard library
-- mDNS/SSDP auto-discovery of Tasmota devices (optional zeroconf)
-- Graceful error handling
+The plugs publish to the broker built into Venus OS (FlashMQ on
+127.0.0.1:1883); no HTTP polling is involved. Uses paho-mqtt, which ships
+preinstalled on recent Venus OS images (no pip needed).
 
 Usage:
-    ./dbus-tasmota-pv.py --devices 192.168.164.73:120 192.168.164.74:121
-    ./dbus-tasmota-pv.py --discover  # Auto-discover Tasmota devices via mDNS
     ./dbus-tasmota-pv.py --config /etc/dbus-tasmota-pv.json
+    ./dbus-tasmota-pv.py --devices tasmota_120:120 tasmota_121:121
+    ./dbus-tasmota-pv.py --mqtt-host 192.168.160.150 --devices tasmota_120:120
 
-Where each device is specified as IP:INSTANCE
+Where each device is TOPIC:INSTANCE and the plug publishes tele/TOPIC/SENSOR.
 """
 
 import argparse
-import asyncio
 import gc
 import json
 import logging
 import signal
 import sys
-import threading
-import urllib.error
-import urllib.request
 from pathlib import Path
 from time import time
 from typing import Any
 
-# Optional mDNS discovery
+# paho-mqtt ships preinstalled on Venus OS 3.x (used by dbus-mqtt-* services).
+# Imported lazily-guarded so the module stays importable for tests on hosts
+# without paho.
 try:
-    from zeroconf import IPVersion, ServiceBrowser, ServiceStateChange, Zeroconf
+    from paho.mqtt.client import CallbackAPIVersion
+    from paho.mqtt.client import Client as MqttClient
 
-    ZEROCONF_AVAILABLE = True
+    PAHO_AVAILABLE = True
 except ImportError:
-    ZEROCONF_AVAILABLE = False
-    ServiceBrowser = ServiceStateChange = Zeroconf = IPVersion = None
+    PAHO_AVAILABLE = False
+    MqttClient = None  # type: ignore[assignment,misc]
+    CallbackAPIVersion = None  # type: ignore[assignment,misc]
 
 # Venus OS path (optional - needed on Venus OS only)
 VELIB_PATH = Path("/opt/victronenergy/dbus-systemcalc-py/ext/velib_python")
@@ -57,10 +56,11 @@ else:
     DBusGMainLoop = None
     GLib = None
 
-VERSION = "1.4.0"
-POLL_INTERVAL_MS = 2000
-HTTP_TIMEOUT = 5.0  # seconds
-MAX_CONSECUTIVE_FAILURES = 5
+VERSION = "2.0.0"
+STALE_AFTER_SECONDS = 90  # no telemetry for this long -> report offline
+TICK_SECONDS = 5  # staleness sweep / heartbeat / GC cadence
+GC_INTERVAL_TICKS = 30  # run GC every 30 ticks (~2.5 minutes)
+HEARTBEAT_FILE = "/run/dbus-tasmota-pv.alive"
 
 # D-Bus path constants (avoid magic strings)
 _PATH_CONNECTED = "/Connected"
@@ -72,143 +72,37 @@ _PATH_AC_L1_CURRENT = "/Ac/L1/Current"
 _PATH_AC_ENERGY_FORWARD = "/Ac/Energy/Forward"
 _PATH_AC_ENERGY_DAILY = "/Ac/Energy/Daily"
 
-# mDNS service type for Tasmota
-TASMOTA_MDNS_TYPE = "_tasmota._tcp.local."
-
 # Logging setup
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 logger = logging.getLogger("TasmotaPV")
 
 
-class _StdlibResponse:
-    """Minimal HTTP response wrapper with ``raise_for_status()``/``json()``."""
+def parse_energy_payload(payload: bytes | str) -> tuple[float, float, float, float, float] | None:
+    """Parse a Tasmota ``tele/<topic>/SENSOR`` JSON payload.
 
-    def __init__(self, status: int, body: bytes) -> None:
-        self._status = status
-        self._body = body
-
-    def raise_for_status(self) -> None:
-        if self._status >= 400:
-            raise urllib.error.HTTPError(
-                url=None, code=self._status, msg="HTTP error", hdrs=None, fp=None
-            )
-
-    def json(self) -> Any:
-        return json.loads(self._body.decode("utf-8"))
-
-
-class AsyncHTTPClient:
-    """Async HTTP client wrapper built on the standard library.
-
-    urllib has no async API, so each request runs in a worker thread via
-    ``asyncio.to_thread``; a semaphore keeps concurrent requests bounded.
+    Returns ``(power, voltage, current, total, today)`` or ``None`` when the
+    payload is not JSON or carries no ENERGY block. ``Current`` is derived
+    from power/voltage (Tasmota's own reading is ignored for consistency).
     """
-
-    def __init__(self, max_connections: int):
-        self._semaphore = asyncio.Semaphore(max_connections)
-
-    async def get(self, url: str) -> _StdlibResponse:
-        """Perform a GET request (runs off the event loop)."""
-        async with self._semaphore:
-            return await asyncio.to_thread(self._request, url)
-
-    @staticmethod
-    def _request(url: str) -> _StdlibResponse:
-        with urllib.request.urlopen(url, timeout=HTTP_TIMEOUT) as resp:
-            return _StdlibResponse(resp.getcode() or 200, resp.read())
-
-    async def close(self) -> None:
-        """No persistent connections to close."""
-
-
-class TasmotaMDNSDiscovery:
-    """mDNS discovery for Tasmota devices."""
-
-    def __init__(self, timeout: float = 5.0):
-        self.timeout = timeout
-        self._found_devices: dict[str, str] = {}  # ip -> hostname
-        self._browser = None
-        self._zeroconf = None
-        self._resolving = set()
-        self._tasks: set[asyncio.Task] = set()
-
-    def _on_service_state_change(
-        self,
-        zeroconf: Any,
-        service_type: str,
-        name: str,
-        state_change: ServiceStateChange,
-    ) -> None:
-        """Handle service state changes."""
-        if state_change is ServiceStateChange.Added:
-            task = asyncio.create_task(self._resolve_service(zeroconf, service_type, name))
-            self._tasks.add(task)
-            task.add_done_callback(self._tasks.discard)
-
-    async def _resolve_service(self, zeroconf: Any, service_type: str, name: str) -> None:
-        """Resolve service to get IP address."""
-        if name in self._resolving:
-            return
-        self._resolving.add(name)
-        try:
-            info = await asyncio.wait_for(
-                asyncio.get_event_loop().run_in_executor(
-                    None, zeroconf.get_service_info, service_type, name
-                ),
-                timeout=2.0,
-            )
-            if info:
-                ip = ".".join(str(b) for b in info.addresses[0])
-                self._found_devices[ip] = name
-                logger.debug("Discovered Tasmota: %s at %s", name, ip)
-        except (OSError, AttributeError) as e:
-            logger.debug("Failed to resolve service %s: %s", name, e)
-        finally:
-            self._resolving.discard(name)
-
-    async def discover(self) -> dict[str, str]:
-        """Discover Tasmota devices via mDNS."""
-        if not ZEROCONF_AVAILABLE:
-            logger.warning("zeroconf not installed, mDNS discovery disabled")
-            return {}
-
-        self._found_devices = {}
-
-        self._zeroconf = Zeroconf(ip_version=IPVersion.All)
-        self._browser = ServiceBrowser(
-            self._zeroconf,
-            TASMOTA_MDNS_TYPE,
-            handlers=[self._on_service_state_change],
-        )
-
-        # Wait for the full timeout to allow all devices to be discovered
-        # and resolved (returning early would miss devices found later).
-        await asyncio.sleep(self.timeout)
-
-        # Give in-flight resolutions a chance to finish before closing.
-        while self._resolving:
-            await asyncio.sleep(0.1)
-
-        if self._zeroconf:
-            self._zeroconf.close()
-
-        return self._found_devices
+    try:
+        energy = json.loads(payload)["ENERGY"]
+        power = float(energy.get("Power", 0.0))
+        voltage = float(energy.get("Voltage", 115.0))
+        total = float(energy.get("Total", 0.0))
+        today = float(energy.get("Today", 0.0))
+        current = round(power / voltage, 2) if voltage > 0 else 0.0
+        return power, voltage, current, total, today
+    except (json.JSONDecodeError, KeyError, TypeError, ValueError):
+        return None
 
 
 class TasmotaPVInverter:
-    """Single Tasmota device as PV Inverter on D-Bus"""
+    """Single Tasmota plug as a PV Inverter on D-Bus, fed by MQTT telemetry."""
 
-    def __init__(
-        self,
-        ip_address: str,
-        instance: int,
-        client: AsyncHTTPClient,
-    ):
-        self.ip = ip_address
+    def __init__(self, topic: str, instance: int):
+        self.topic = topic
         self.instance = instance
-        self._client = client
-        self._consecutive_failures = 0
-        self._last_success = time()
+        self._last_update = time()
         self._connected = True
 
         # Create a private bus connection for each instance to avoid path conflicts
@@ -220,8 +114,8 @@ class TasmotaPVInverter:
         # Mandatory management paths
         self._dbusservice.add_path("/Mgmt/ProcessName", "dbus-tasmota-pv.py")
         self._dbusservice.add_path("/Mgmt/ProcessVersion", VERSION)
-        self._dbusservice.add_path("/ProductName", f"Solar Tasmota {ip_address}")
-        self._dbusservice.add_path("/CustomName", f"Solar Tasmota {ip_address}")
+        self._dbusservice.add_path("/ProductName", f"Solar Tasmota {topic}")
+        self._dbusservice.add_path("/CustomName", f"Solar Tasmota {topic}")
         self._dbusservice.add_path("/Serial", f"TASMOTA-{instance}")
         self._dbusservice.add_path(_PATH_CONNECTED, 1)
         self._dbusservice.add_path("/DeviceInstance", instance)
@@ -241,15 +135,15 @@ class TasmotaPVInverter:
         self._dbusservice.add_path(_PATH_AC_ENERGY_DAILY, 0.0)
 
         self._dbusservice.register()
-        logger.info(f"Registered PV Inverter: {service_name} (IP: {ip_address})")
+        logger.info(f"Registered PV Inverter: {service_name} (MQTT topic: {topic})")
 
     def _set_paths(self, values: dict[str, Any]) -> None:
         """Update D-Bus paths safely from any thread.
 
-        The D-Bus service is serviced by the GLib main loop running in a
-        background thread, while `update()` runs on the asyncio event loop
-        thread. Marshal the writes onto the GLib thread via `GLib.idle_add`
-        to avoid concurrent access to the underlying D-Bus connection.
+        The D-Bus service is serviced by the GLib main loop in the main
+        thread, while ``apply()`` runs on the paho-mqtt network thread.
+        Marshal the writes onto the GLib thread via `GLib.idle_add` to avoid
+        concurrent access to the underlying D-Bus connection.
         """
 
         def _apply():
@@ -259,81 +153,12 @@ class TasmotaPVInverter:
 
         GLib.idle_add(_apply)
 
-    async def _get_tasmota_data(self) -> tuple[float, float, float, float, float] | None:
-        """Fetch energy data from Tasmota device"""
-        try:
-            response = await self._client.get(f"http://{self.ip}/cm?cmnd=Status%208")
-            response.raise_for_status()
-            data = response.json()
-
-            energy = data["StatusSNS"]["ENERGY"]
-            power = float(energy.get("Power", 0.0))
-            voltage = float(energy.get("Voltage", 115.0))
-            total = float(energy.get("Total", 0.0))
-            today = float(energy.get("Today", 0.0))
-            current = round(power / voltage, 2) if voltage > 0 else 0.0
-
-            # Reset failure counter on success
-            self._consecutive_failures = 0
-            self._last_success = time()
-
-            if not self._connected:
-                self._connected = True
-                logger.info(f"Tasmota {self.ip} reconnected")
-
-            return power, voltage, current, total, today
-
-        except Exception as e:  # noqa: BLE001
-            # urllib wraps the underlying cause (socket.timeout,
-            # ConnectionRefusedError, ...) inside URLError.reason.
-            cause = getattr(e, "reason", None)
-            if cause is None:
-                cause = e
-            if isinstance(cause, TimeoutError):
-                self._handle_failure("timeout")
-            elif isinstance(cause, ConnectionError):
-                self._handle_failure("connection error")
-            else:
-                self._handle_failure(str(e))
-            return None
-
-    def _handle_failure(self, reason: str):
-        """Handle connection failure with backoff"""
-        self._consecutive_failures += 1
-
-        if self._consecutive_failures == 1:
-            logger.warning(f"Tasmota {self.ip}: {reason}")
-        elif self._consecutive_failures == MAX_CONSECUTIVE_FAILURES:
-            logger.error(
-                f"Tasmota {self.ip}: {MAX_CONSECUTIVE_FAILURES} consecutive failures, marking offline"
-            )
-            self._connected = False
-        elif self._consecutive_failures % 30 == 0:
-            # Log every 30 failures (~1 minute)
-            logger.warning(
-                f"Tasmota {self.ip}: still offline ({self._consecutive_failures} failures)"
-            )
-
-    async def update(self):
-        """Update D-Bus values from Tasmota data"""
-        result = await self._get_tasmota_data()
-
-        if result is None:
-            # Stale data: report via ErrorCode, fallback to zero power
-            if self._consecutive_failures >= MAX_CONSECUTIVE_FAILURES:
-                self._set_paths(
-                    {
-                        _PATH_ERROR_CODE: 1,  # Offline/comm error
-                        _PATH_CONNECTED: 0,
-                        _PATH_AC_POWER: 0.0,
-                        _PATH_AC_L1_POWER: 0.0,
-                    }
-                )
-            else:
-                self._set_paths({_PATH_ERROR_CODE: 0, _PATH_CONNECTED: 1})
-            return
-
-        power, voltage, current, total, today = result
+    def apply(self, power: float, voltage: float, current: float, total: float, today: float):
+        """Push a fresh ENERGY reading onto D-Bus."""
+        self._last_update = time()
+        if not self._connected:
+            self._connected = True
+            logger.info(f"Tasmota {self.topic} back online")
 
         self._set_paths(
             {
@@ -347,6 +172,76 @@ class TasmotaPVInverter:
                 _PATH_AC_ENERGY_DAILY: today,
             }
         )
+
+    def check_stale(self) -> None:
+        """Mark the device offline when no telemetry arrived recently."""
+        if not self._connected:
+            return
+        if time() - self._last_update > STALE_AFTER_SECONDS:
+            self._connected = False
+            logger.warning(
+                f"Tasmota {self.topic}: no telemetry for {STALE_AFTER_SECONDS}s, marking offline"
+            )
+            self._set_paths(
+                {
+                    _PATH_ERROR_CODE: 1,  # Offline/comm error
+                    _PATH_CONNECTED: 0,
+                    _PATH_AC_POWER: 0.0,
+                    _PATH_AC_L1_POWER: 0.0,
+                }
+            )
+
+
+class MqttEnergyListener:
+    """Subscribe to ``tele/<topic>/SENSOR`` for every inverter and route payloads."""
+
+    def __init__(self, inverters: list[TasmotaPVInverter], host: str, port: int):
+        self._host = host
+        self._port = port
+        self._subscriptions = {f"tele/{inv.topic}/SENSOR": inv for inv in inverters}
+        self._client = MqttClient(
+            callback_api_version=CallbackAPIVersion.VERSION2,
+            client_id="dbus-tasmota-pv",
+        )
+        self._client.reconnect_delay_set(min_delay=1, max_delay=30)
+        self._client.on_connect = self._on_connect
+        self._client.on_disconnect = self._on_disconnect
+        self._client.on_message = self._on_message
+
+    def start(self) -> None:
+        """Connect asynchronously and start the network thread (auto-reconnect)."""
+        self._client.connect_async(self._host, self._port, keepalive=60)
+        self._client.loop_start()
+
+    def stop(self) -> None:
+        """Stop the network thread and disconnect."""
+        self._client.loop_stop()
+        self._client.disconnect()
+
+    def _on_connect(self, client, userdata, flags, reason_code, properties):
+        # paho v2 hands us a ReasonCode object; guard is_failure for robustness
+        if getattr(reason_code, "is_failure", False):
+            logger.error(f"MQTT connect to {self._host}:{self._port} failed: {reason_code}")
+            return
+        logger.info(
+            f"Connected to MQTT broker {self._host}:{self._port}, "
+            f"subscribing: {', '.join(sorted(self._subscriptions))}"
+        )
+        client.subscribe([(topic, 0) for topic in self._subscriptions])
+
+    def _on_disconnect(self, client, userdata, disconnect_flags, reason_code, properties):
+        logger.warning(f"MQTT disconnected ({reason_code}); auto-reconnect in progress")
+
+    def _on_message(self, client, userdata, msg):
+        inverter = self._subscriptions.get(msg.topic)
+        if inverter is None:
+            logger.debug(f"Ignoring message on unconfigured topic: {msg.topic}")
+            return
+        parsed = parse_energy_payload(msg.payload)
+        if parsed is None:
+            logger.warning(f"Tasmota {inverter.topic}: unparseable SENSOR payload")
+            return
+        inverter.apply(*parsed)
 
 
 def load_config(config_path: Path) -> list[tuple[str, int]]:
@@ -362,46 +257,32 @@ def load_config(config_path: Path) -> list[tuple[str, int]]:
         config = json.load(f)
     devices = []
     for device in config.get("devices", []):
-        ip = device.get("ip")
+        topic = device.get("topic")
         instance = device.get("instance")
-        if ip and instance is not None:
-            devices.append((ip, int(instance)))
+        if topic and instance is not None:
+            devices.append((str(topic), int(instance)))
     return devices
 
 
 def _parse_device_spec(spec: str) -> tuple[str, int]:
-    """Parse IP:INSTANCE string into (ip, instance) tuple."""
-    ip, instance_str = spec.rsplit(":", 1)
-    return ip, int(instance_str)
+    """Parse TOPIC:INSTANCE string into (topic, instance) tuple."""
+    topic, instance_str = spec.rsplit(":", 1)
+    return topic, int(instance_str)
 
 
 def _load_devices(args: argparse.Namespace) -> list[tuple[str, int]]:
-    """Load devices from CLI args, mDNS discovery, or config file."""
+    """Load devices from CLI args or config file."""
     if args.devices:
         devices = []
         for spec in args.devices:
             try:
-                ip, instance = _parse_device_spec(spec)
-                devices.append((ip, instance))
-                logger.info(f"CLI device: {ip} (instance {instance})")
+                topic, instance = _parse_device_spec(spec)
+                devices.append((topic, instance))
+                logger.info(f"CLI device: {topic} (instance {instance})")
             except ValueError:
-                logger.error(f"Invalid device specification: {spec} (expected IP:INSTANCE)")
+                logger.error(f"Invalid device specification: {spec} (expected TOPIC:INSTANCE)")
                 sys.exit(1)
         return devices
-
-    if args.discover:
-        logger.info("Auto-discovering Tasmota devices via mDNS...")
-        try:
-            discovery = TasmotaMDNSDiscovery(timeout=args.discover_timeout)
-            discovered = asyncio.run(discovery.discover())
-            if discovered:
-                # Auto-assign instances starting from 120
-                devices = [(ip, 120 + i) for i, ip in enumerate(discovered.keys())]
-                logger.info(f"Discovered {len(devices)} Tasmota device(s): {devices}")
-                return devices
-            logger.warning("No Tasmota devices discovered via mDNS")
-        except Exception:
-            logger.exception("mDNS discovery failed")
 
     if args.config.exists():
         devices = load_config(args.config)
@@ -409,23 +290,18 @@ def _load_devices(args: argparse.Namespace) -> list[tuple[str, int]]:
         return devices
 
     logger.error(f"No devices specified and config file not found: {args.config}")
-    logger.info(
-        "Use --devices IP:INSTANCE, --discover, or create config file at /etc/dbus-tasmota-pv.json"
-    )
+    logger.info("Use --devices TOPIC:INSTANCE or create config file at /etc/dbus-tasmota-pv.json")
     sys.exit(1)
 
 
-def _create_inverters(
-    devices: list[tuple[str, int]], client: AsyncHTTPClient
-) -> list[TasmotaPVInverter]:
+def _create_inverters(devices: list[tuple[str, int]]) -> list[TasmotaPVInverter]:
     """Create TasmotaPVInverter instances for each configured device."""
     inverters = []
-    for ip, instance in devices:
+    for topic, instance in devices:
         try:
-            inv = TasmotaPVInverter(ip, instance, client)
-            inverters.append(inv)
+            inverters.append(TasmotaPVInverter(topic, instance))
         except Exception:
-            logger.exception(f"Failed to create inverter for {ip}")
+            logger.exception(f"Failed to create inverter for {topic}")
     return inverters
 
 
@@ -435,87 +311,41 @@ def _write_heartbeat(heartbeat_file: str) -> None:
         with open(heartbeat_file, "w", encoding="utf-8") as f:
             f.write(str(int(time())))
     except OSError:
-        # Intentionally ignored: failed heartbeat write should not crash polling
+        # Intentionally ignored: failed heartbeat write should not crash the service
         pass
 
 
-def _make_poll_fn(inverters: list[TasmotaPVInverter], heartbeat_file: str):
-    """Build the periodic poll callback with memory management."""
+def _make_tick(inverters: list[TasmotaPVInverter], heartbeat_file: str):
+    """Build the periodic tick callback (staleness, GC, heartbeat)."""
     state = {"gc_counter": 0}
-    gc_interval = 150  # Run GC every 150 polls (~5 minutes)
 
-    async def poll() -> bool:
-        """Periodic update with memory management"""
+    def tick() -> bool:
+        """Periodic housekeeping; returning True keeps the GLib timer alive."""
         for inv in inverters:
             try:
-                await inv.update()
+                inv.check_stale()
             except Exception:
-                logger.exception("Error updating %s", inv.ip)
+                logger.exception("Error checking staleness of %s", inv.topic)
 
         # Periodic garbage collection
         state["gc_counter"] += 1
-        if state["gc_counter"] >= gc_interval:
+        if state["gc_counter"] >= GC_INTERVAL_TICKS:
             state["gc_counter"] = 0
             gc.collect()
 
-        # Heartbeat for watchdog (run blocking I/O off the event loop)
-        await asyncio.to_thread(_write_heartbeat, heartbeat_file)
-
+        _write_heartbeat(heartbeat_file)
         return True
 
-    return poll
+    return tick
 
 
-async def _async_main(
-    devices: list[tuple[str, int]], heartbeat_file: str, shutdown_event: asyncio.Event
-):
-    """Async main function."""
-    logger.info(f"=== dbus-tasmota-pv v{VERSION} ===")
-
-    # Create shared HTTP client with connection pooling
-    client = AsyncHTTPClient(len(devices))
-
-    # Create inverter instances
-    inverters = _create_inverters(devices, client)
-
-    if not inverters:
-        logger.error("No inverters could be created")
-        await client.close()
-        sys.exit(1)
-
-    # Start polling
-    poll = _make_poll_fn(inverters, heartbeat_file)
-
-    logger.info(f"Service started with {len(inverters)} inverter(s), entering main loop")
-
-    try:
-        while not shutdown_event.is_set():
-            try:
-                await asyncio.wait_for(shutdown_event.wait(), timeout=POLL_INTERVAL_MS / 1000)
-            except TimeoutError:
-                # Expected: wait_for times out every POLL_INTERVAL_MS when no
-                # shutdown signal has been received, so we just loop and poll.
-                pass
-            if shutdown_event.is_set():
-                break
-            await poll()
-    except Exception:
-        logger.exception("Unexpected error in main loop")
-    finally:
-        logger.info("Cleaning up...")
-        await client.close()
-        gc.collect()
-        logger.info("Shutdown complete")
-
-
-def _register_signal_handlers(mainloop, shutdown_event: asyncio.Event, loop) -> None:
+def _register_signal_handlers(mainloop) -> None:
     """Register SIGTERM/SIGINT handlers for graceful shutdown."""
 
     def graceful_shutdown(signum, frame):
         """Handle shutdown signals gracefully"""
         sig_name = signal.Signals(signum).name if hasattr(signal, "Signals") else str(signum)
         logger.info(f"Received {sig_name}, shutting down gracefully...")
-        loop.call_soon_threadsafe(shutdown_event.set)
         mainloop.quit()
 
     signal.signal(signal.SIGTERM, graceful_shutdown)
@@ -525,14 +355,13 @@ def _register_signal_handlers(mainloop, shutdown_event: asyncio.Event, loop) -> 
 def _parse_args() -> argparse.Namespace:
     """Build the argument parser and parse CLI arguments."""
     parser = argparse.ArgumentParser(
-        description="Tasmota Energy Meter to D-Bus PV Inverter Bridge",
+        description="Tasmota Energy Meter (MQTT) to D-Bus PV Inverter Bridge",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
     ./dbus-tasmota-pv.py --config /etc/dbus-tasmota-pv.json
-    ./dbus-tasmota-pv.py -d 192.168.1.100:120 -d 192.168.1.101:121
-    ./dbus-tasmota-pv.py --discover
-    ./dbus-tasmota-pv.py --discover --discover-timeout 10
+    ./dbus-tasmota-pv.py -d tasmota_120:120 -d tasmota_121:121
+    ./dbus-tasmota-pv.py -d tasmota_120:120 --mqtt-host 192.168.160.150
         """,
     )
     parser.add_argument(
@@ -546,45 +375,28 @@ Examples:
         "-d",
         "--devices",
         nargs="+",
-        help="Device specifications as IP:INSTANCE (overrides config file)",
+        help="Device specifications as TOPIC:INSTANCE (overrides config file)",
     )
     parser.add_argument(
-        "--discover",
-        action="store_true",
-        help="Auto-discover Tasmota devices via mDNS/SSDP",
+        "--mqtt-host",
+        default="127.0.0.1",
+        help="MQTT broker host (default: 127.0.0.1, the Venus OS broker)",
     )
     parser.add_argument(
-        "--discover-timeout",
-        type=float,
-        default=5.0,
-        help="mDNS discovery timeout in seconds (default: 5.0)",
+        "--mqtt-port",
+        type=int,
+        default=1883,
+        help="MQTT broker port (default: 1883)",
     )
     return parser.parse_args()
 
 
-async def _run_with_glib_mainloop(devices, heartbeat_file, mainloop):
-    """Drive the asyncio main loop alongside the GLib D-Bus main loop."""
-    shutdown_event = asyncio.Event()
-    loop = asyncio.get_running_loop()
-
-    _register_signal_handlers(mainloop, shutdown_event, loop)
-
-    # The GLib main loop is only needed to service D-Bus (signal delivery,
-    # property change dispatch); run it in a background thread so it never
-    # blocks the asyncio event loop that drives polling.
-    glib_thread = threading.Thread(target=mainloop.run, daemon=True)
-    glib_thread.start()
-
-    try:
-        await _async_main(devices, heartbeat_file, shutdown_event)
-    finally:
-        if mainloop.is_running():
-            mainloop.quit()
-        glib_thread.join(timeout=5)
-
-
 def main():
     args = _parse_args()
+
+    if not PAHO_AVAILABLE:
+        logger.error("paho-mqtt is required (preinstalled on Venus OS 3.x); cannot continue")
+        sys.exit(1)
 
     devices = _load_devices(args)
 
@@ -592,11 +404,28 @@ def main():
     DBusGMainLoop(set_as_default=True)
     mainloop = GLib.MainLoop()
 
-    # Heartbeat file for watchdog
-    heartbeat_file = "/run/dbus-tasmota-pv.alive"
+    inverters = _create_inverters(devices)
+    if not inverters:
+        logger.error("No inverters could be created")
+        sys.exit(1)
 
-    # Run async main
-    asyncio.run(_run_with_glib_mainloop(devices, heartbeat_file, mainloop))
+    _register_signal_handlers(mainloop)
+
+    listener = MqttEnergyListener(inverters, args.mqtt_host, args.mqtt_port)
+    GLib.timeout_add_seconds(TICK_SECONDS, _make_tick(inverters, HEARTBEAT_FILE))
+
+    logger.info(
+        f"=== dbus-tasmota-pv v{VERSION}: {len(inverters)} inverter(s), "
+        f"MQTT {args.mqtt_host}:{args.mqtt_port} ==="
+    )
+    listener.start()
+    try:
+        mainloop.run()
+    finally:
+        logger.info("Cleaning up...")
+        listener.stop()
+        gc.collect()
+        logger.info("Shutdown complete")
 
 
 if __name__ == "__main__":

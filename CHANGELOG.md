@@ -5,6 +5,18 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.0.0] - 2026-08-21
+
+### Changed
+- **BREAKING**: data acquisition switched from HTTP polling to MQTT subscription
+- Devices are now configured as MQTT `TOPIC:INSTANCE` instead of `IP:INSTANCE`
+- Plugs publish `tele/<topic>/SENSOR` to the Venus OS broker (FlashMQ, 127.0.0.1:1883)
+- Uses preinstalled paho-mqtt (no pip needed on Venus OS)
+- Telemetry staleness marks device offline after 90s without messages
+
+### Removed
+- HTTP polling client and mDNS/SSDP auto-discovery (`--discover`)
+
 ## [1.2.1] - 2026-03-29
 
 ### Added
