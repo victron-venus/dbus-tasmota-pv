@@ -65,59 +65,30 @@ flowchart TB
 - Auto-reconnect and staleness detection (offline after 90s without data)
 - Uses paho-mqtt preinstalled on Venus OS 3.x (no pip needed)
 
-## Configuration
+## Device Discovery
 
-The installed service reads its device list from `/data/dbus-tasmota-pv/config.json`
-(created from `config.example.json` on first install). Edit that file and
-restart the service to apply changes:
+No configuration needed. The service subscribes to the wildcard MQTT topic
+`tele/+/SENSOR`, and every Tasmota plug whose telemetry it sees is
+automatically registered as a PV inverter on the D-Bus. Add a new plug
+(make sure its Tasmota `Topic` is unique and it publishes to the broker) and
+it appears on its own within one telemetry interval.
 
-```json
-{
-  "devices": [
-    {"topic": "tasmota_120", "instance": 120},
-    {"topic": "tasmota_121", "instance": 121}
-  ]
-}
-```
+Each discovered plug gets a deterministic D-Bus instance derived from its
+MQTT topic, so service names survive restarts. The `/Serial` path equals
+the Tasmota topic (`TASMOTA-<topic>`), which keeps device identity stable
+in the GUI and VRM.
 
-```bash
-ssh Cerbo "svc -t /service/dbus-tasmota-pv"
-```
-
-### Local (gitignored) config for `deploy.sh`
-
-`deploy.sh` automatically deploys your personal device list from a gitignored
-file `config.local.json` in the repo root (so your IPs never get committed).
-If the file is absent, the example config is used instead:
+Broker defaults to `127.0.0.1:1883` (the Venus OS broker); override with `--mqtt-host` / `--mqtt-port` when running off-device:
 
 ```bash
-# config.local.json (gitignored) — deployed as /data/dbus-tasmota-pv/config.json
-{
-  "devices": [
-    {"topic": "tasmota_120", "instance": 120},
-    {"topic": "tasmota_121", "instance": 121}
-  ]
-}
+./dbus-tasmota-pv.py --mqtt-host 192.168.160.150
 ```
-
-Devices can also be configured via command line arguments (overrides the config file):
-
-```bash
-# Format: TOPIC:INSTANCE (plug publishes tele/TOPIC/SENSOR)
-./dbus-tasmota-pv.py --devices tasmota_120:120 tasmota_121:121
-```
-
-Parameters:
-- Topic: MQTT topic of the Tasmota plug (Tasmota `Topic` setting)
-- Instance: D-Bus device instance (unique number, 120-199 recommended)
-
-Broker defaults to `127.0.0.1:1883` (the Venus OS broker); override with `--mqtt-host` / `--mqtt-port` when running off-device.
 
 ## Requirements
 
 - Venus OS (Cerbo GX, Venus GX, Raspberry Pi with Venus OS)
-- Tasmota smart plugs with energy monitoring (e.g., Sonoff S31, Athom)
-- Tasmota plugs configured to publish MQTT to the Venus OS broker (see below)
+- Tasmota smart plugs **with energy monitoring** publishing to the Venus OS
+  broker (e.g., Sonoff S31, Athom). Plugs without an ENERGY block are ignored.
 - paho-mqtt (preinstalled on Venus OS 3.x)
 
 ## Installation

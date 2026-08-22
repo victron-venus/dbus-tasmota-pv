@@ -1,8 +1,9 @@
 """Tests for dbus-tasmota-pv service.
 
 Covers:
-- load_config(): JSON parsing for valid/invalid/edge-case configs
+- topic_from_mqtt_topic()/stable_instance(): MQTT discovery helpers
 - parse_energy_payload(): Tasmota tele/<topic>/SENSOR JSON parsing
+- MqttEnergyListener: dynamic device discovery from tele/+/SENSOR messages
 - TasmotaPVInverter.apply()/check_stale(): freshness tracking and degradation
 """
 
@@ -48,8 +49,9 @@ _mod.GLib = MagicMock()
 
 TasmotaPVInverter = _mod.TasmotaPVInverter
 MqttEnergyListener = _mod.MqttEnergyListener
-load_config = _mod.load_config
 parse_energy_payload = _mod.parse_energy_payload
+topic_from_mqtt_topic = _mod.topic_from_mqtt_topic
+stable_instance = _mod.stable_instance
 
 
 # ---------------------------------------------------------------------------
@@ -62,64 +64,45 @@ def _make_inverter(topic: str = "tasmota_120", instance: int = 120) -> TasmotaPV
     return TasmotaPVInverter(topic, instance)
 
 
+def _sensor_msg(topic: str, energy: dict | None) -> MagicMock:
+    """Build a mock paho message on tele/<topic>/SENSOR."""
+    msg = MagicMock()
+    msg.topic = f"tele/{topic}/SENSOR"
+    if energy is None:
+        msg.payload = b"not json at all"
+    else:
+        msg.payload = json.dumps({"ENERGY": energy}).encode("utf-8")
+    return msg
+
+
 # ===================================================================
-# load_config tests
+# discovery helper tests
 # ===================================================================
 
 
-class TestLoadConfig:
-    """load_config() — JSON config parsing."""
+class TestDiscoveryHelpers:
+    """topic_from_mqtt_topic()/stable_instance()."""
 
-    def test_valid_config(self, tmp_path: Path) -> None:
-        cfg = tmp_path / "cfg.json"
-        cfg.write_text(
-            json.dumps(
-                {
-                    "devices": [
-                        {"topic": "tasmota_120", "instance": 120},
-                        {"topic": "tasmota_121", "instance": 121},
-                    ]
-                }
-            )
-        )
-        assert load_config(cfg) == [("tasmota_120", 120), ("tasmota_121", 121)]
+    def test_extracts_topic_from_sensor_message(self) -> None:
+        assert topic_from_mqtt_topic("tele/tasmota_120/SENSOR") == "tasmota_120"
 
-    def test_empty_devices(self, tmp_path: Path) -> None:
-        cfg = tmp_path / "cfg.json"
-        cfg.write_text(json.dumps({"devices": []}))
-        assert load_config(cfg) == []
+    def test_topic_with_slashes_rejected(self) -> None:
+        # Nested topics would break the 3-part pattern
+        assert topic_from_mqtt_topic("tele/a/b/SENSOR") is None
 
-    def test_missing_devices_key(self, tmp_path: Path) -> None:
-        cfg = tmp_path / "cfg.json"
-        cfg.write_text(json.dumps({"other_key": True}))
-        assert load_config(cfg) == []
+    def test_stat_and_result_topics_rejected(self) -> None:
+        assert topic_from_mqtt_topic("stat/tasmota_120/RESULT") is None
 
-    def test_device_missing_topic(self, tmp_path: Path) -> None:
-        cfg = tmp_path / "cfg.json"
-        cfg.write_text(json.dumps({"devices": [{"instance": 120}]}))
-        assert load_config(cfg) == []
+    def test_empty_topic_rejected(self) -> None:
+        assert topic_from_mqtt_topic("tele//SENSOR") is None
 
-    def test_device_missing_instance(self, tmp_path: Path) -> None:
-        cfg = tmp_path / "cfg.json"
-        cfg.write_text(json.dumps({"devices": [{"topic": "tasmota_120"}]}))
-        assert load_config(cfg) == []
+    def test_stable_instance_deterministic(self) -> None:
+        assert stable_instance("tasmota_120", set()) == stable_instance("tasmota_120", set())
 
-    def test_instance_zero_accepted(self, tmp_path: Path) -> None:
-        cfg = tmp_path / "cfg.json"
-        cfg.write_text(json.dumps({"devices": [{"topic": "tasmota_x", "instance": 0}]}))
-        assert load_config(cfg) == [("tasmota_x", 0)]
-
-    def test_non_integer_instance_raises(self, tmp_path: Path) -> None:
-        cfg = tmp_path / "cfg.json"
-        cfg.write_text(json.dumps({"devices": [{"topic": "tasmota_x", "instance": "abc"}]}))
-        with pytest.raises(ValueError):
-            load_config(cfg)
-
-    def test_invalid_json_raises(self, tmp_path: Path) -> None:
-        cfg = tmp_path / "cfg.json"
-        cfg.write_text("{{{{invalid")
-        with pytest.raises(json.JSONDecodeError):
-            load_config(cfg)
+    def test_stable_instance_avoids_collision(self) -> None:
+        base = stable_instance("tasmota_120", set())
+        assert stable_instance("tasmota_120", {base}) != base
+        assert stable_instance("tasmota_120", {base}) == base + 1
 
 
 # ===================================================================
@@ -148,26 +131,28 @@ class TestParseEnergyPayload:
                 },
             }
         )
-        power, voltage, current, total, today = parse_energy_payload(payload)
+        power, voltage, current, total, today, yesterday = parse_energy_payload(payload)
         assert power == pytest.approx(123.4)
         assert voltage == pytest.approx(230.1)
         assert current == pytest.approx(0.54, rel=0.01)  # 123.4/230.1 ≈ 0.54
         assert total == pytest.approx(5678.9)
         assert today == pytest.approx(12.5)
+        assert yesterday == pytest.approx(100.0)
 
     def test_bytes_payload_accepted(self) -> None:
         payload = json.dumps({"ENERGY": {"Power": 50, "Voltage": 230, "Total": 10, "Today": 1}})
         parsed = parse_energy_payload(payload.encode("utf-8"))
         assert parsed is not None
-        power, voltage, _current, total, today = parsed
+        power, voltage, _current, total, today, yesterday = parsed
         assert power == pytest.approx(50.0)
         assert voltage == pytest.approx(230.0)
         assert total == pytest.approx(10.0)
         assert today == pytest.approx(1.0)
+        assert yesterday == pytest.approx(0.0)
 
     def test_missing_power_defaults_zero(self) -> None:
         payload = json.dumps({"ENERGY": {"Voltage": 230, "Total": 100, "Today": 5.0}})
-        power, voltage, current, total, today = parse_energy_payload(payload)
+        power, voltage, current, total, today, _yesterday = parse_energy_payload(payload)
         assert power == pytest.approx(0.0)
         assert voltage == pytest.approx(230.0)
         assert current == pytest.approx(0.0)
@@ -176,14 +161,14 @@ class TestParseEnergyPayload:
 
     def test_missing_voltage_defaults_115(self) -> None:
         payload = json.dumps({"ENERGY": {"Power": 100, "Total": 50, "Today": 2.5}})
-        power, voltage, current, _total, _today = parse_energy_payload(payload)
+        power, voltage, current, _total, _today, _yesterday = parse_energy_payload(payload)
         assert power == pytest.approx(100.0)
         assert voltage == pytest.approx(115.0)
         assert current == pytest.approx(0.87, rel=0.01)  # 100/115 ≈ 0.87
 
     def test_zero_voltage_no_division_error(self) -> None:
         payload = json.dumps({"ENERGY": {"Power": 100, "Voltage": 0, "Total": 50, "Today": 1.0}})
-        power, voltage, current, total, today = parse_energy_payload(payload)
+        power, voltage, current, total, today, _yesterday = parse_energy_payload(payload)
         assert power == pytest.approx(100.0)
         assert voltage == pytest.approx(0.0)
         assert current == pytest.approx(0.0)
@@ -192,12 +177,13 @@ class TestParseEnergyPayload:
 
     def test_empty_energy_dict(self) -> None:
         payload = json.dumps({"Time": "2026-08-21T12:00:00", "ENERGY": {}})
-        power, voltage, current, total, today = parse_energy_payload(payload)
+        power, voltage, current, total, today, yesterday = parse_energy_payload(payload)
         assert power == pytest.approx(0.0)
         assert voltage == pytest.approx(115.0)
         assert current == pytest.approx(0.0)
         assert total == pytest.approx(0.0)
         assert today == pytest.approx(0.0)
+        assert yesterday == pytest.approx(0.0)
 
     def test_missing_energy_key_returns_none(self) -> None:
         assert parse_energy_payload('{"Time":"2026-08-21T12:00:00"}') is None
@@ -222,7 +208,7 @@ class TestInverterFreshness:
         inv = _make_inverter()
         inv._connected = False
         inv._last_update = time() - 999
-        inv.apply(power=42.0, voltage=230.0, current=0.18, total=7.5, today=0.3)
+        inv.apply(power=42.0, voltage=230.0, current=0.18, total=7.5, today=0.3, yesterday=0.9)
         assert inv._connected is True
         assert time() - inv._last_update < 5
 
@@ -250,7 +236,7 @@ class TestInverterFreshness:
         inv._last_update = time() - (_mod.STALE_AFTER_SECONDS + 10)
         inv.check_stale()
         assert inv._connected is False
-        inv.apply(power=10.0, voltage=230.0, current=0.04, total=1.0, today=0.1)
+        inv.apply(power=10.0, voltage=230.0, current=0.04, total=1.0, today=0.1, yesterday=0.5)
         assert inv._connected is True
 
 
@@ -260,33 +246,71 @@ def mock_glib_idle_add_calls(inv: TasmotaPVInverter) -> int:
 
 
 # ===================================================================
-# MqttEnergyListener tests (subscription routing)
+# MqttEnergyListener tests (auto-discovery via tele/+/SENSOR)
 # ===================================================================
 
 
-class TestMqttEnergyListener:
-    """MqttEnergyListener() — topic subscription mapping."""
+class TestMqttDiscovery:
+    """MqttEnergyListener() — dynamic device discovery."""
 
-    def test_subscription_topics_built_from_inverters(self) -> None:
+    def _listener(self) -> MqttEnergyListener:
         pytest.importorskip("paho.mqtt")
-        inv1 = _make_inverter("tasmota_120", 120)
-        inv2 = _make_inverter("tasmota_121", 121)
-        listener = MqttEnergyListener([inv1, inv2], "127.0.0.1", 1883)
-        assert set(listener._subscriptions) == {
-            "tele/tasmota_120/SENSOR",
-            "tele/tasmota_121/SENSOR",
-        }
+        return MqttEnergyListener("127.0.0.1", 1883)
 
-    def test_on_message_routes_to_matching_inverter(self) -> None:
-        pytest.importorskip("paho.mqtt")
-        inv1 = _make_inverter("tasmota_120", 120)
-        inv2 = _make_inverter("tasmota_121", 121)
-        listener = MqttEnergyListener([inv1, inv2], "127.0.0.1", 1883)
+    def test_new_device_discovered_on_first_message(self) -> None:
+        listener = self._listener()
+        assert listener.inverters() == []
+        listener._on_message(MagicMock(), None, _sensor_msg("tasmota_120", {"Power": 50}))
+        discovered = listener.inverters()
+        assert len(discovered) == 1
+        assert discovered[0].topic == "tasmota_120"
+
+    def test_second_message_reuses_same_inverter(self) -> None:
+        listener = self._listener()
+        listener._on_message(MagicMock(), None, _sensor_msg("tasmota_120", {"Power": 10}))
+        first = listener.inverters()[0]
+        listener._on_message(MagicMock(), None, _sensor_msg("tasmota_120", {"Power": 20}))
+        assert listener.inverters() == [first]
+
+    def test_distinct_devices_get_distinct_instances(self) -> None:
+        listener = self._listener()
+        for topic in ("tasmota_a", "tasmota_b", "tasmota_c"):
+            listener._on_message(MagicMock(), None, _sensor_msg(topic, {"Power": 5}))
+        instances = [inv.instance for inv in listener.inverters()]
+        assert len(set(instances)) == 3
+
+    def test_unparseable_payload_does_not_register_device(self) -> None:
+        listener = self._listener()
+        listener._on_message(MagicMock(), None, _sensor_msg("not_a_meter", None))
+        assert listener.inverters() == []
+
+    def test_off_pattern_topic_ignored(self) -> None:
+        listener = self._listener()
         msg = MagicMock()
-        msg.topic = "tele/tasmota_121/SENSOR"
-        msg.payload = json.dumps(
-            {"ENERGY": {"Power": 88, "Voltage": 230, "Total": 3.0, "Today": 0.5}}
-        ).encode("utf-8")
+        msg.topic = "stat/tasmota_120/RESULT"
+        msg.payload = json.dumps({"ENERGY": {"Power": 5}}).encode("utf-8")
         listener._on_message(MagicMock(), None, msg)
-        # apply() is invoked synchronously via the route; state reflects it
-        assert inv2._connected is True
+        assert listener.inverters() == []
+
+    def test_on_connect_subscribes_wildcard(self) -> None:
+        listener = self._listener()
+        client = MagicMock()
+        listener._on_connect(client, None, {}, MagicMock(is_failure=False), None)
+        client.subscribe.assert_called_once_with(listener.DISCOVERY_FILTER, 0)
+
+    def test_failed_connect_does_not_subscribe(self) -> None:
+        listener = self._listener()
+        client = MagicMock()
+        reason = MagicMock()
+        reason.is_failure = True
+        listener._on_connect(client, None, {}, reason, None)
+        client.subscribe.assert_not_called()
+
+    def test_telemetry_applied_to_discovered_inverter(self) -> None:
+        listener = self._listener()
+        listener._on_message(
+            MagicMock(), None, _sensor_msg("tasmota_120", {"Power": 88, "Voltage": 230})
+        )
+        inv = listener.inverters()[0]
+        assert inv._connected is True
+        assert time() - inv._last_update < 5

@@ -1,6 +1,0 @@
-{
-  "devices": [
-    {"topic": "tasmota_120", "instance": 120},
-    {"topic": "tasmota_121", "instance": 121}
-  ]
-}

@@ -38,13 +38,11 @@ elif [[ -f "$INSTALL_DIR/dbus-tasmota-pv.py" ]]; then
     echo "Using existing $INSTALL_DIR/dbus-tasmota-pv.py"
 fi
 
-# Install default config if not present
-if [[ -f "config.example.json" ]] && [[ ! -f "$INSTALL_DIR/config.json" ]]; then
-    cp config.example.json "$INSTALL_DIR/config.json"
-    echo "Created default config at $INSTALL_DIR/config.json"
-    echo ">>> Edit $INSTALL_DIR/config.json to set your Tasmota device IPs!"
-elif [[ -f "$INSTALL_DIR/config.json" ]]; then
-    echo "Using existing $INSTALL_DIR/config.json"
+# Devices are auto-discovered via MQTT (tele/+/SENSOR); no config file needed.
+# Clean up a config left behind by a previous (<3.0.0) install.
+if [[ -f "$INSTALL_DIR/config.json" ]]; then
+    rm "$INSTALL_DIR/config.json"
+    echo "Removed obsolete $INSTALL_DIR/config.json (devices are now auto-discovered)"
 fi
 
 # Remove old symlink if exists and create proper directory
@@ -71,7 +69,7 @@ fi
 cat > "$SERVICE_DATA_DIR/run" << 'EOF'
 #!/bin/sh
 cd /data/dbus-tasmota-pv
-exec python3 dbus-tasmota-pv.py --config /data/dbus-tasmota-pv/config.json 2>> /var/log/dbus-tasmota-pv.log > /dev/null
+exec python3 dbus-tasmota-pv.py 2>> /var/log/dbus-tasmota-pv.log > /dev/null
 EOF
 chmod +x "$SERVICE_DATA_DIR/run"
 

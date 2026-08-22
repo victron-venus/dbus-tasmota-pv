@@ -4,19 +4,20 @@ dbus-tasmota-pv - Tasmota Energy Meter to D-Bus PV Inverter Bridge
 ===================================================================
 
 Reads power data that Tasmota smart plugs (with energy monitoring) push to
-MQTT (``tele/<topic>/SENSOR``) and publishes it to Victron D-Bus as PV
-Inverter devices.
+MQTT and publishes it to Victron D-Bus as PV Inverter devices.
 
-The plugs publish to the broker built into Venus OS (FlashMQ on
-127.0.0.1:1883); no HTTP polling is involved. Uses paho-mqtt, which ships
-preinstalled on recent Venus OS images (no pip needed).
+Devices are DISCOVERED automatically: the script subscribes to the
+wildcard topic ``tele/+/SENSOR`` on the broker built into Venus OS
+(FlashMQ on 127.0.0.1:1883) and registers a D-Bus PV Inverter for every
+plug whose first telemetry arrives. No device list is configured anywhere;
+a newly added Tasmota plug appears on the D-Bus as soon as it publishes.
+
+Uses paho-mqtt, which ships preinstalled on recent Venus OS images
+(no pip needed).
 
 Usage:
-    ./dbus-tasmota-pv.py --config /etc/dbus-tasmota-pv.json
-    ./dbus-tasmota-pv.py --devices tasmota_120:120 tasmota_121:121
-    ./dbus-tasmota-pv.py --mqtt-host 192.168.160.150 --devices tasmota_120:120
-
-Where each device is TOPIC:INSTANCE and the plug publishes tele/TOPIC/SENSOR.
+    ./dbus-tasmota-pv.py
+    ./dbus-tasmota-pv.py --mqtt-host 192.168.160.150
 """
 
 import argparse
@@ -25,6 +26,8 @@ import json
 import logging
 import signal
 import sys
+import threading
+import zlib
 from pathlib import Path
 from time import time
 from typing import Any
@@ -56,7 +59,7 @@ else:
     DBusGMainLoop = None
     GLib = None
 
-VERSION = "2.0.0"
+VERSION = "3.0.0"
 STALE_AFTER_SECONDS = 90  # no telemetry for this long -> report offline
 TICK_SECONDS = 5  # staleness sweep / heartbeat / GC cadence
 GC_INTERVAL_TICKS = 30  # run GC every 30 ticks (~2.5 minutes)
@@ -71,18 +74,24 @@ _PATH_AC_L1_VOLTAGE = "/Ac/L1/Voltage"
 _PATH_AC_L1_CURRENT = "/Ac/L1/Current"
 _PATH_AC_ENERGY_FORWARD = "/Ac/Energy/Forward"
 _PATH_AC_ENERGY_DAILY = "/Ac/Energy/Daily"
+# Non-standard extension: yesterday's yield as reported by the Tasmota plug
+# (ENERGY.Yesterday). Mirrored to MQTT by mqtt-gateway as N/..._Energy/_Daily/_Yesterday.
+_PATH_ENERGY_YESTERDAY = "/Energy/Daily/Yesterday"
 
 # Logging setup
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 logger = logging.getLogger("TasmotaPV")
 
 
-def parse_energy_payload(payload: bytes | str) -> tuple[float, float, float, float, float] | None:
+def parse_energy_payload(
+    payload: bytes | str,
+) -> tuple[float, float, float, float, float, float] | None:
     """Parse a Tasmota ``tele/<topic>/SENSOR`` JSON payload.
 
-    Returns ``(power, voltage, current, total, today)`` or ``None`` when the
-    payload is not JSON or carries no ENERGY block. ``Current`` is derived
-    from power/voltage (Tasmota's own reading is ignored for consistency).
+    Returns ``(power, voltage, current, total, today, yesterday)`` or ``None``
+    when the payload is not JSON or carries no ENERGY block. ``Current`` is
+    derived from power/voltage (Tasmota's own reading is ignored for
+    consistency).
     """
     try:
         energy = json.loads(payload)["ENERGY"]
@@ -90,8 +99,9 @@ def parse_energy_payload(payload: bytes | str) -> tuple[float, float, float, flo
         voltage = float(energy.get("Voltage", 115.0))
         total = float(energy.get("Total", 0.0))
         today = float(energy.get("Today", 0.0))
+        yesterday = float(energy.get("Yesterday", 0.0))
         current = round(power / voltage, 2) if voltage > 0 else 0.0
-        return power, voltage, current, total, today
+        return power, voltage, current, total, today, yesterday
     except (json.JSONDecodeError, KeyError, TypeError, ValueError):
         return None
 
@@ -116,7 +126,7 @@ class TasmotaPVInverter:
         self._dbusservice.add_path("/Mgmt/ProcessVersion", VERSION)
         self._dbusservice.add_path("/ProductName", f"Solar Tasmota {topic}")
         self._dbusservice.add_path("/CustomName", f"Solar Tasmota {topic}")
-        self._dbusservice.add_path("/Serial", f"TASMOTA-{instance}")
+        self._dbusservice.add_path("/Serial", f"TASMOTA-{topic}")
         self._dbusservice.add_path(_PATH_CONNECTED, 1)
         self._dbusservice.add_path("/DeviceInstance", instance)
         self._dbusservice.add_path("/ProductId", 0xA144)  # Standard PV Inverter ID
@@ -133,6 +143,7 @@ class TasmotaPVInverter:
         self._dbusservice.add_path(_PATH_AC_L1_CURRENT, 0.0)
         self._dbusservice.add_path(_PATH_AC_ENERGY_FORWARD, 0.0)
         self._dbusservice.add_path(_PATH_AC_ENERGY_DAILY, 0.0)
+        self._dbusservice.add_path(_PATH_ENERGY_YESTERDAY, 0.0)
 
         self._dbusservice.register()
         logger.info(f"Registered PV Inverter: {service_name} (MQTT topic: {topic})")
@@ -153,7 +164,15 @@ class TasmotaPVInverter:
 
         GLib.idle_add(_apply)
 
-    def apply(self, power: float, voltage: float, current: float, total: float, today: float):
+    def apply(
+        self,
+        power: float,
+        voltage: float,
+        current: float,
+        total: float,
+        today: float,
+        yesterday: float,
+    ):
         """Push a fresh ENERGY reading onto D-Bus."""
         self._last_update = time()
         if not self._connected:
@@ -170,6 +189,7 @@ class TasmotaPVInverter:
                 _PATH_AC_L1_CURRENT: current,
                 _PATH_AC_ENERGY_FORWARD: total,
                 _PATH_AC_ENERGY_DAILY: today,
+                _PATH_ENERGY_YESTERDAY: yesterday,
             }
         )
 
@@ -192,13 +212,46 @@ class TasmotaPVInverter:
             )
 
 
-class MqttEnergyListener:
-    """Subscribe to ``tele/<topic>/SENSOR`` for every inverter and route payloads."""
+def topic_from_mqtt_topic(mqtt_topic: str) -> str | None:
+    """Extract the Tasmota topic from a ``tele/<topic>/SENSOR`` MQTT topic.
 
-    def __init__(self, inverters: list[TasmotaPVInverter], host: str, port: int):
+    Returns ``None`` for anything that does not match the pattern.
+    """
+    parts = mqtt_topic.split("/")
+    if len(parts) == 3 and parts[0] == "tele" and parts[2] == "SENSOR" and parts[1]:
+        return parts[1]
+    return None
+
+
+def stable_instance(topic: str, used: set[int]) -> int:
+    """Derive a deterministic D-Bus DeviceInstance from the Tasmota topic.
+
+    The same topic always maps to the same instance across restarts, so the
+    D-Bus service name stays stable. Collisions are resolved by linear probe.
+    """
+    instance = zlib.crc32(topic.encode("utf-8")) % 10000
+    while instance in used:
+        instance = (instance + 1) % 10000
+    return instance
+
+
+class MqttEnergyListener:
+    """Discover inverters via the wildcard subscription ``tele/+/SENSOR``.
+
+    Every Tasmota plug that publishes an ENERGY telemetry payload is picked
+    up on its first message and registered as a D-Bus PV Inverter — no
+    configuration needed.
+    """
+
+    DISCOVERY_FILTER = "tele/+/SENSOR"
+
+    def __init__(self, host: str, port: int):
         self._host = host
         self._port = port
-        self._subscriptions = {f"tele/{inv.topic}/SENSOR": inv for inv in inverters}
+        self._inverters: dict[str, TasmotaPVInverter] = {}
+        # _on_message runs on the paho network thread while tick() iterates
+        # the registry on the GLib thread; guard both sides.
+        self._lock = threading.Lock()
         self._client = MqttClient(
             callback_api_version=CallbackAPIVersion.VERSION2,
             client_id="dbus-tasmota-pv",
@@ -207,6 +260,11 @@ class MqttEnergyListener:
         self._client.on_connect = self._on_connect
         self._client.on_disconnect = self._on_disconnect
         self._client.on_message = self._on_message
+
+    def inverters(self) -> list[TasmotaPVInverter]:
+        """Snapshot of currently discovered inverters (thread-safe)."""
+        with self._lock:
+            return list(self._inverters.values())
 
     def start(self) -> None:
         """Connect asynchronously and start the network thread (auto-reconnect)."""
@@ -218,6 +276,26 @@ class MqttEnergyListener:
         self._client.loop_stop()
         self._client.disconnect()
 
+    def _get_or_create(self, topic: str) -> TasmotaPVInverter | None:
+        """Return the inverter for ``topic``, registering it on first sight."""
+        with self._lock:
+            existing = self._inverters.get(topic)
+        if existing is not None:
+            return existing
+        try:
+            with self._lock:
+                # Re-check under the lock: another message may have created it.
+                existing = self._inverters.get(topic)
+                if existing is not None:
+                    return existing
+                used = {inv.instance for inv in self._inverters.values()}
+                inverter = TasmotaPVInverter(topic, stable_instance(topic, used))
+                self._inverters[topic] = inverter
+                return inverter
+        except Exception:
+            logger.exception(f"Failed to register discovered device '{topic}'")
+            return None
+
     def _on_connect(self, client, userdata, flags, reason_code, properties):
         # paho v2 hands us a ReasonCode object; guard is_failure for robustness
         if getattr(reason_code, "is_failure", False):
@@ -225,84 +303,28 @@ class MqttEnergyListener:
             return
         logger.info(
             f"Connected to MQTT broker {self._host}:{self._port}, "
-            f"subscribing: {', '.join(sorted(self._subscriptions))}"
+            f"discovering devices via '{self.DISCOVERY_FILTER}'"
         )
-        client.subscribe([(topic, 0) for topic in self._subscriptions])
+        client.subscribe(self.DISCOVERY_FILTER, 0)
 
     def _on_disconnect(self, client, userdata, disconnect_flags, reason_code, properties):
         logger.warning(f"MQTT disconnected ({reason_code}); auto-reconnect in progress")
 
     def _on_message(self, client, userdata, msg):
-        inverter = self._subscriptions.get(msg.topic)
-        if inverter is None:
-            logger.debug(f"Ignoring message on unconfigured topic: {msg.topic}")
+        topic = topic_from_mqtt_topic(msg.topic)
+        if topic is None:
+            logger.debug(f"Ignoring message on unexpected topic: {msg.topic}")
             return
         parsed = parse_energy_payload(msg.payload)
         if parsed is None:
-            logger.warning(f"Tasmota {inverter.topic}: unparseable SENSOR payload")
+            # Non-energy plugs also publish tele/+/SENSOR; only complain for
+            # devices we already know should carry ENERGY data.
+            level = logging.WARNING if self.inverters() else logging.DEBUG
+            logger.log(level, f"Tasmota {topic}: unparseable SENSOR payload")
             return
-        inverter.apply(*parsed)
-
-
-def load_config(config_path: Path) -> list[tuple[str, int]]:
-    """Load devices from a JSON config file."""
-    # Validate path before opening (prevent path traversal via ..)
-    try:
-        config_path = config_path.resolve()
-    except (OSError, ValueError) as e:
-        raise ValueError(f"Invalid config path: {config_path}") from e
-    if not config_path.is_file():
-        raise ValueError(f"Config path is not a file: {config_path}")
-    with open(config_path, encoding="utf-8") as f:
-        config = json.load(f)
-    devices = []
-    for device in config.get("devices", []):
-        topic = device.get("topic")
-        instance = device.get("instance")
-        if topic and instance is not None:
-            devices.append((str(topic), int(instance)))
-    return devices
-
-
-def _parse_device_spec(spec: str) -> tuple[str, int]:
-    """Parse TOPIC:INSTANCE string into (topic, instance) tuple."""
-    topic, instance_str = spec.rsplit(":", 1)
-    return topic, int(instance_str)
-
-
-def _load_devices(args: argparse.Namespace) -> list[tuple[str, int]]:
-    """Load devices from CLI args or config file."""
-    if args.devices:
-        devices = []
-        for spec in args.devices:
-            try:
-                topic, instance = _parse_device_spec(spec)
-                devices.append((topic, instance))
-                logger.info(f"CLI device: {topic} (instance {instance})")
-            except ValueError:
-                logger.error(f"Invalid device specification: {spec} (expected TOPIC:INSTANCE)")
-                sys.exit(1)
-        return devices
-
-    if args.config.exists():
-        devices = load_config(args.config)
-        logger.info(f"Loaded {len(devices)} device(s) from {args.config}")
-        return devices
-
-    logger.error(f"No devices specified and config file not found: {args.config}")
-    logger.info("Use --devices TOPIC:INSTANCE or create config file at /etc/dbus-tasmota-pv.json")
-    sys.exit(1)
-
-
-def _create_inverters(devices: list[tuple[str, int]]) -> list[TasmotaPVInverter]:
-    """Create TasmotaPVInverter instances for each configured device."""
-    inverters = []
-    for topic, instance in devices:
-        try:
-            inverters.append(TasmotaPVInverter(topic, instance))
-        except Exception:
-            logger.exception(f"Failed to create inverter for {topic}")
-    return inverters
+        inverter = self._get_or_create(topic)
+        if inverter is not None:
+            inverter.apply(*parsed)
 
 
 def _write_heartbeat(heartbeat_file: str) -> None:
@@ -315,13 +337,13 @@ def _write_heartbeat(heartbeat_file: str) -> None:
         pass
 
 
-def _make_tick(inverters: list[TasmotaPVInverter], heartbeat_file: str):
+def _make_tick(listener: MqttEnergyListener, heartbeat_file: str):
     """Build the periodic tick callback (staleness, GC, heartbeat)."""
     state = {"gc_counter": 0}
 
     def tick() -> bool:
         """Periodic housekeeping; returning True keeps the GLib timer alive."""
-        for inv in inverters:
+        for inv in listener.inverters():
             try:
                 inv.check_stale()
             except Exception:
@@ -355,27 +377,16 @@ def _register_signal_handlers(mainloop) -> None:
 def _parse_args() -> argparse.Namespace:
     """Build the argument parser and parse CLI arguments."""
     parser = argparse.ArgumentParser(
-        description="Tasmota Energy Meter (MQTT) to D-Bus PV Inverter Bridge",
+        description=(
+            "Tasmota Energy Meter (MQTT) to D-Bus PV Inverter Bridge — "
+            "devices are auto-discovered via tele/+/SENSOR"
+        ),
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
-    ./dbus-tasmota-pv.py --config /etc/dbus-tasmota-pv.json
-    ./dbus-tasmota-pv.py -d tasmota_120:120 -d tasmota_121:121
-    ./dbus-tasmota-pv.py -d tasmota_120:120 --mqtt-host 192.168.160.150
+    ./dbus-tasmota-pv.py
+    ./dbus-tasmota-pv.py --mqtt-host 192.168.160.150
         """,
-    )
-    parser.add_argument(
-        "-c",
-        "--config",
-        type=Path,
-        default=Path("/etc/dbus-tasmota-pv.json"),
-        help="Path to JSON config file",
-    )
-    parser.add_argument(
-        "-d",
-        "--devices",
-        nargs="+",
-        help="Device specifications as TOPIC:INSTANCE (overrides config file)",
     )
     parser.add_argument(
         "--mqtt-host",
@@ -398,25 +409,19 @@ def main():
         logger.error("paho-mqtt is required (preinstalled on Venus OS 3.x); cannot continue")
         sys.exit(1)
 
-    devices = _load_devices(args)
-
     # Setup D-Bus main loop
     DBusGMainLoop(set_as_default=True)
     mainloop = GLib.MainLoop()
 
-    inverters = _create_inverters(devices)
-    if not inverters:
-        logger.error("No inverters could be created")
-        sys.exit(1)
-
     _register_signal_handlers(mainloop)
 
-    listener = MqttEnergyListener(inverters, args.mqtt_host, args.mqtt_port)
-    GLib.timeout_add_seconds(TICK_SECONDS, _make_tick(inverters, HEARTBEAT_FILE))
+    # Inverters register themselves as telemetry arrives; nothing pre-created.
+    listener = MqttEnergyListener(args.mqtt_host, args.mqtt_port)
+    GLib.timeout_add_seconds(TICK_SECONDS, _make_tick(listener, HEARTBEAT_FILE))
 
     logger.info(
-        f"=== dbus-tasmota-pv v{VERSION}: {len(inverters)} inverter(s), "
-        f"MQTT {args.mqtt_host}:{args.mqtt_port} ==="
+        f"=== dbus-tasmota-pv v{VERSION}: MQTT discovery on "
+        f"{args.mqtt_host}:{args.mqtt_port} ({listener.DISCOVERY_FILTER}) ==="
     )
     listener.start()
     try:
