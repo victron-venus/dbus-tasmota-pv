@@ -12,16 +12,11 @@ permissions:
 jobs:
   ci:
     name: CI
-    runs-on: ubuntu-latest
-    steps:
-      - name: Harden the runner (Audit all outbound calls)
-        uses: step-security/harden-runner@05e31511f85b41b11d1cf0ef85d0992719546e2c # v2.21.0
-        with:
-          egress-policy: audit
-      - name: Run reusable Python CI
-        uses: victron-venus/venus-os-ci-toolkit/.github/workflows/python-ci.yml@a8c0e51b1de43cac8c90d966326684553ca166ff
-        with:
-          python-version: '3.11'
-          # mypy has pre-existing errors (Venus OS imports without stubs); tracked separately
-          run-type-check: false
-          coverage-threshold: 60
+    # Reusable workflows must be called at the JOB level (no runs-on/steps);
+    # a step-level `uses` of a workflow_call workflow is rejected by GitHub.
+    uses: victron-venus/venus-os-ci-toolkit/.github/workflows/python-ci.yml@a8c0e51b1de43cac8c90d966326684553ca166ff
+    with:
+      python-version: '3.11'
+      # mypy has pre-existing errors (Venus OS imports without stubs); tracked separately
+      run-type-check: false
+      coverage-threshold: 60
