@@ -179,9 +179,54 @@ svc -u /service/dbus-tasmota-pv
 tail -f /var/log/dbus-tasmota-pv/current | tai64nlocal
 ```
 
+## Flashing Tasmota Firmware
+
+Plugs must run [Tasmota](https://tasmota.github.io/docs/) with **energy monitoring**
+enabled — the driver only reacts to the `ENERGY` block in telemetry. Three ways to
+get there, easiest first:
+
+**1. Buy pre-flashed hardware** — vendors such as
+[Athom](https://www.athom.tech/) sell smart plugs with Tasmota preinstalled
+(energy monitoring included). Zero flashing work.
+
+**2. Web installer** — requires opening the plug and wiring a USB-TTL adapter
+(**3.3 V logic**, 5 V will damage the chip):
+
+1. Wire the adapter: `VCC → 3V3`, `GND → GND`, board `RX → TX`, board `TX → RX`
+2. Hold `GPIO0` to `GND` while applying power to enter flash mode
+3. Open https://tasmota.github.io/install/ in Chrome or Edge, connect, and
+   install the latest `tasmota.bin` release build
+
+Same job from the CLI with esptool:
+
+```bash
+esptool.py --port /dev/ttyUSB0 --baud 115200 write_flash -fs 1MB -fm dout -ff 40m tasmota.bin
+```
+
+**3. No-teardown methods** for Tuya-based plugs:
+[cloudcutter](https://github.com/tuya-cloudcutter/tuya-cloudcutter) pushes
+Tasmota over the network by exploiting the vendor cloud handshake.
+
+### First boot
+
+1. Join the plug's Wi-Fi access point (`tasmota-XXXXXX`) and set your
+   SSID/password at `http://192.168.4.1`.
+2. If power readings stay empty, apply the correct pinout: find your plug model
+   in the [device template repository](https://templates.blakadder.com/) and
+   paste its Template string into Tasmota.
+3. Continue with [Tasmota Setup](#tasmota-setup) below to point it at the Cerbo
+   broker.
+
 ## Tasmota Setup
 
-Point each plug at the Venus OS broker and give it a unique topic:
+Point each plug at the Venus OS broker and give it a unique topic. **This step
+is what makes the whole chain work**: the dbus-tasmota-pv driver subscribes on
+the Cerbo itself (`127.0.0.1:1883`) and discovers plugs purely from
+`tele/+/SENSOR` traffic. A plug publishing to any other broker — Home
+Assistant's included — is invisible to the driver and never becomes a PV
+inverter. One broker, one telemetry stream: consumed by the driver
+(D-Bus → GUI/VRM) and mirrored to Home Assistant via the
+[MQTT bridge](#home-assistant-integration).
 
 ```bash
 # From any machine on the LAN (GX_IP = your Venus OS device)
@@ -192,6 +237,99 @@ curl 'http://PLUG_IP/cm?cmnd=Backlog%20MqttHost%20GX_IP%3B%20MqttPort%201883%3B%
 - `SetOption19 0`: disable Home Assistant discovery publishing
 - `TelePeriod 60`: push telemetry every 60 seconds
 - `SensorRetain 1`: broker keeps last reading (driver gets data immediately after restart)
+
+## Home Assistant Integration
+
+Home Assistant consumes the **same** telemetry stream by bridging the Cerbo's
+broker over MQTT. One source of truth: no duplicate polling, and VRM, the
+Victron GUI, and HA all see identical plug state.
+
+### Why bridge instead of pointing plugs at two brokers?
+
+- The driver subscribes **locally on the Cerbo** (`127.0.0.1:1883`); plugs aimed
+  at HA's broker directly would break the D-Bus side.
+- The mosquitto bridge mirrors topics into HA without touching plug config.
+- Commands flow back along one path (`cmnd/# out`), so HA can switch plugs
+  without a second write route that could disagree with the Cerbo.
+- The Cerbo broker accepts anonymous connections from the LAN, so the bridge
+  needs no credentials — keep the network firewalled accordingly.
+
+### 1. Install the Mosquitto broker add-on
+
+In Home Assistant: Settings → Add-ons → **Mosquitto broker** → install & start.
+
+### 2. Create the bridge configuration
+
+Create `mosquitto/victron.conf` inside HA's `share` folder — via Samba
+(`\\homeassistant\share\mosquitto\victron.conf`) or the Terminal add-on
+(`/share/mosquitto/victron.conf`):
+
+```conf
+# Bridge the Cerbo GX broker into Home Assistant.
+#
+# Direction is relative to HA:
+#   in  = HA receives these topics from the Cerbo
+#   out = HA publishes these topics to the Cerbo
+
+connection victron
+address 192.168.160.150:1883
+
+# Victron native MQTT-API: notifications in; readings and writes out.
+# Everything is prefixed with victron/ locally to avoid clashing with HA topics.
+topic N/# in 0 victron/
+topic R/# out 0 victron/
+topic W/# out 0 victron/
+
+# Tasmota telemetry and discovery payloads relayed by the Cerbo (one-way, read-only):
+topic tasmota/# in 0
+topic tele/# in 0
+topic stat/# in 0
+topic homeassistant/# in 0
+
+# Plug switching commands from HA down through the Cerbo (one-way, write-only):
+topic cmnd/# out 0
+```
+
+Replace `192.168.160.150` with your GX device's IP address.
+
+### 3. Activate the customization
+
+Mosquitto add-on → Configuration tab:
+
+```yaml
+customize:
+  active: true
+  folder: mosquitto
+```
+
+Save and restart the add-on. Every `.conf` file under `/share/mosquitto/` is now
+included by the broker.
+
+### 4. Verify
+
+From the HA Terminal add-on:
+
+```bash
+mosquitto_sub -h core-mosquitto -t 'tele/+/SENSOR' -C 1   # plug telemetry arrives
+mosquitto_sub -h core-mosquitto -t 'victron/N/#' -C 1     # Victron notifications arrive
+mosquitto_sub -h core-mosquitto -t 'homeassistant/#' -v   # discovery payloads arrive
+```
+
+### What you get in Home Assistant
+
+| Topics | Meaning |
+|--------|---------|
+| `tele/<topic>/SENSOR` | live power / voltage / current / energy per plug |
+| `stat/<topic>/RESULT` | command responses from the plugs |
+| `cmnd/<topic>/...` | writable controls (`POWER`, `TelePeriod`, ...) |
+| `victron/N/<gx-serial>/...` | Victron GX notifications |
+| `homeassistant/#` | HA auto-discovery payloads forwarded from the plugs |
+
+With `SetOption19 1` each plug publishes HA discovery payloads; they travel over
+the bridge and the plug appears in HA automatically as a power sensor plus a
+switchable outlet. This repo recommends `SetOption19 0` for a clean Cerbo-only
+setup — then you get the raw topics only and wire entities yourself (e.g. an
+MQTT sensor on `tele/<topic>/SENSOR` at JSON path `ENERGY.Power`).
 
 ## Troubleshooting
 
