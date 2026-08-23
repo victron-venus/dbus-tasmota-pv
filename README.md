@@ -7,8 +7,6 @@
 [![Python 3.7+](https://img.shields.io/badge/python-3.7+-blue.svg)](https://www.python.org/downloads/)
 [![Venus OS](https://img.shields.io/badge/Venus%20OS-3.x-blue)](https://github.com/victronenergy/venus)
 [![Platform](https://img.shields.io/badge/platform-Linux-lightgrey)](https://github.com/victron-venus/dbus-tasmota-pv)
-[![GitHub stars](https://img.shields.io/github/stars/victron-venus/dbus-tasmota-pv)](https://github.com/victron-venus/dbus-tasmota-pv/stargazers)
-[![GitHub forks](https://img.shields.io/github/forks/victron-venus/dbus-tasmota-pv)](https://github.com/victron-venus/dbus-tasmota-pv/network/members)
 [![GitHub watchers](https://img.shields.io/github/watchers/victron-venus/dbus-tasmota-pv)](https://github.com/victron-venus/dbus-tasmota-pv/watchers)
 [![GitHub contributors](https://img.shields.io/github/contributors/victron-venus/dbus-tasmota-pv)](https://github.com/victron-venus/dbus-tasmota-pv/graphs/contributors)
 [![GitHub issues](https://img.shields.io/github/issues/victron-venus/dbus-tasmota-pv)](https://github.com/victron-venus/dbus-tasmota-pv/issues)
