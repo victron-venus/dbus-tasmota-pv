@@ -12,7 +12,6 @@ readonly SEPARATOR='=============================================='
 
 INSTALL_DIR="/data/dbus-tasmota-pv"
 SERVICE_DIR="/service/dbus-tasmota-pv"
-LOG_DIR="/var/log/dbus-tasmota-pv"
 
 echo "$SEPARATOR"
 echo "  dbus-tasmota-pv Installer for Venus OS"
@@ -54,24 +53,24 @@ fi
 # Create service directory structure in /data (persists across reboots)
 SERVICE_DATA_DIR="/data/dbus-tasmota-pv/service/dbus-tasmota-pv"
 echo ">>> Setting up daemontools service in $SERVICE_DATA_DIR..."
-mkdir -p "$SERVICE_DATA_DIR"
-mkdir -p "$LOG_DIR"
+mkdir -p "$SERVICE_DATA_DIR/log"
 
-# Verify log directory is writable
-if [[ ! -w "$LOG_DIR" ]]; then
-    echo "Warning: Log directory $LOG_DIR is not writable" >&2
-fi
-
-# Clear stale error log from previous runs
-: > /var/log/dbus-tasmota-pv.log 2>/dev/null || true
-
-# Create run script in /data (stderr to log file, stdout to /dev/null)
+# Run script: stdout/stderr are captured by the paired multilog (log/run
+# below), matching the stock Venus OS service layout. A plain-file redirect
+# here leaves the service without a usable log/run, which spams readproctitle
+# with "unable to start log/run" on every supervise restart.
 cat > "$SERVICE_DATA_DIR/run" << 'EOF'
 #!/bin/sh
-cd /data/dbus-tasmota-pv
-exec python3 dbus-tasmota-pv.py 2>> /var/log/dbus-tasmota-pv.log > /dev/null
+cd /data/dbus-tasmota-pv || exit 1
+exec python3 dbus-tasmota-pv.py
 EOF
 chmod +x "$SERVICE_DATA_DIR/run"
+
+cat > "$SERVICE_DATA_DIR/log/run" << 'EOF'
+#!/bin/sh
+exec multilog t s25000 n4 /var/log/dbus-tasmota-pv
+EOF
+chmod +x "$SERVICE_DATA_DIR/log/run"
 
 # Create /service symlink (will be recreated by rc.local on boot).
 # A pre-3.0 install left a real directory at $SERVICE_DIR; `ln -sf` cannot
@@ -81,6 +80,14 @@ if [[ -d "$SERVICE_DIR" && ! -L "$SERVICE_DIR" ]]; then
     mv "$SERVICE_DIR" "${SERVICE_DIR}.old.$(date +%s)"
 fi
 ln -sf "$SERVICE_DATA_DIR" "$SERVICE_DIR"
+
+# svscan caches whether a service has a log pair when it first sees the
+# directory; an entry created before log/run existed never gains one until
+# its supervise process is restarted (svscan then respawns the full pair).
+if [[ -f "$SERVICE_DIR/supervise/pid" && ! -p "$SERVICE_DIR/log/supervise/ok" ]]; then
+    echo ">>> Restarting supervise so svscan picks up the log pair..."
+    kill "$(cat "$SERVICE_DIR/supervise/pid")" 2>/dev/null || true
+fi
 
 echo "Created service at $SERVICE_DIR"
 echo ""
@@ -122,7 +129,7 @@ echo "Commands:"
 echo "  Status:   svstat /service/dbus-tasmota-pv"
 echo "  Restart:  svc -t /service/dbus-tasmota-pv"
 echo "  Stop:     svc -d /service/dbus-tasmota-pv"
-echo "  Errors:   tail -f /var/log/dbus-tasmota-pv.log"
+echo "  Errors:   tail -f /var/log/dbus-tasmota-pv/current"
 echo ""
 
 # Wait for daemontools to pick up the new service.  svscan polls /service
@@ -136,4 +143,4 @@ for _ in $(seq 1 20); do
 done
 
 # Show service status
-svstat "$SERVICE_DIR" 2>/dev/null || echo "Service starting..."
+svstat "$SERVICE_DIR" "$SERVICE_DIR/log" 2>/dev/null || echo "Service starting..."
