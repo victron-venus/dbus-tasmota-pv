@@ -81,13 +81,17 @@ if [[ -d "$SERVICE_DIR" && ! -L "$SERVICE_DIR" ]]; then
 fi
 ln -sf "$SERVICE_DATA_DIR" "$SERVICE_DIR"
 
-# svscan caches whether a service has a log pair when it first sees the
-# directory; an entry created before log/run existed never gains one until
-# its supervise process is restarted (svscan then respawns the full pair).
-if [[ -f "$SERVICE_DIR/supervise/pid" && ! -p "$SERVICE_DIR/log/supervise/ok" ]]; then
-    echo ">>> Restarting supervise so svscan picks up the log pair..."
-    kill "$(cat "$SERVICE_DIR/supervise/pid")" 2>/dev/null || true
-fi
+# svscan caches each /service entry by directory inode and never re-evaluates
+# whether it has a log pair; an entry first seen without log/run stays
+# single-supervise forever (readproctitle "unable to start log/run", stdout
+# lost in the 1KB ring). Stop the old supervision cleanly and replace the
+# directory with a fresh-inode copy so svscan creates a full service+log pair.
+svc -dx "$SERVICE_DIR" 2>/dev/null || true
+sleep 1
+cp -a "$SERVICE_DATA_DIR" "$SERVICE_DATA_DIR.new"
+mv "$SERVICE_DATA_DIR" "$SERVICE_DATA_DIR.old"
+mv "$SERVICE_DATA_DIR.new" "$SERVICE_DATA_DIR"
+rm -rf "$SERVICE_DATA_DIR.old"
 
 echo "Created service at $SERVICE_DIR"
 echo ""
