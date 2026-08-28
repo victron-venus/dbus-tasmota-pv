@@ -4,3 +4,4 @@ release.txt
 logs
 __pycache__/
 config.local.json
+*.backup
