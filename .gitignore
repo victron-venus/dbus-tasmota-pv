@@ -5,3 +5,4 @@ logs
 __pycache__/
 config.local.json
 *.backup
+.DS_Store
