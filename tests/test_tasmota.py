@@ -319,7 +319,8 @@ def test_discovery_and_writes_wait_for_glib(monkeypatch):
     listener._on_message(None, None, _sensor_msg("plug", {"Power": 20}))
     assert listener.inverters() == []
     assert len(pending) == 1
-    assert pending.pop()() is False
+    dispatch_result = pending.pop()()
+    assert dispatch_result is False
     inverter = listener.inverters()[0]
     inverter._dbusservice.__setitem__.assert_any_call("/Ac/Power", 20.0)
 
