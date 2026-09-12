@@ -314,3 +314,20 @@ class TestMqttDiscovery:
         inv = listener.inverters()[0]
         assert inv._connected is True
         assert time() - inv._last_update < 5
+
+
+@pytest.mark.parametrize("energy", [None, [], "invalid", 42, True])
+def test_non_object_energy_does_not_interrupt_following_telemetry(energy) -> None:
+    """Malformed ENERGY blocks must not escape the MQTT callback."""
+    listener = MqttEnergyListener("localhost", 1883)
+    listener._get_or_create = MagicMock()
+    invalid = MagicMock(topic="tele/plug/SENSOR")
+    invalid.payload = json.dumps({"ENERGY": energy}).encode()
+    listener._on_message(None, None, invalid)
+    listener._get_or_create.assert_not_called()
+
+    listener._on_message(None, None, _sensor_msg("plug", {"Power": 125, "Voltage": 250}))
+    listener._get_or_create.assert_called_once_with("plug")
+    listener._get_or_create.return_value.apply.assert_called_once_with(
+        125.0, 250.0, 0.5, 0.0, 0.0, 0.0
+    )

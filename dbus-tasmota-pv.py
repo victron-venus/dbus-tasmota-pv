@@ -89,12 +89,14 @@ def parse_energy_payload(
     """Parse a Tasmota ``tele/<topic>/SENSOR`` JSON payload.
 
     Returns ``(power, voltage, current, total, today, yesterday)`` or ``None``
-    when the payload is not JSON or carries no ENERGY block. ``Current`` is
+    when the payload is not JSON or carries no ENERGY object. ``Current`` is
     derived from power/voltage (Tasmota's own reading is ignored for
     consistency).
     """
     try:
         energy = json.loads(payload)["ENERGY"]
+        if not isinstance(energy, dict):
+            return None
         power = float(energy.get("Power", 0.0))
         voltage = float(energy.get("Voltage", 115.0))
         total = float(energy.get("Total", 0.0))
