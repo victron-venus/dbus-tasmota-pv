@@ -71,6 +71,9 @@ automatically registered as a PV inverter on the D-Bus. Add a new plug
 (make sure its Tasmota `Topic` is unique and it publishes to the broker) and
 it appears on its own within one telemetry interval.
 
+Malformed telemetry, including a non-object `ENERGY` value, is ignored so
+subsequent valid readings continue to update the inverters.
+
 Each discovered plug gets a deterministic D-Bus instance derived from its
 MQTT topic, so service names survive restarts. The `/Serial` path equals
 the Tasmota topic (`TASMOTA-<topic>`), which keeps device identity stable
