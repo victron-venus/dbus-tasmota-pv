@@ -310,6 +310,8 @@ class TestMqttDiscovery:
 
 
 def test_discovery_and_writes_wait_for_glib(monkeypatch):
+    monkeypatch.setattr(_mod, "MqttClient", MagicMock())
+    monkeypatch.setattr(_mod, "CallbackAPIVersion", MagicMock())
     pending = []
     monkeypatch.setattr(_mod.GLib, "idle_add", pending.append)
     listener = MqttEnergyListener("127.0.0.1", 1883)
