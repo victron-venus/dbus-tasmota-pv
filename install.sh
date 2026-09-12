@@ -20,8 +20,9 @@ if [ "$SCRIPT_DIR" != "$INSTALL_DIR" ]; then
     cp "$SCRIPT_DIR/dbus-tasmota-pv.py" "$INSTALL_DIR/"
 fi
 python3 -m py_compile "$INSTALL_DIR/dbus-tasmota-pv.py"
-# Keep a fresh directory inode without copying supervise locks and FIFOs.
+# Stage only launcher files; existing supervisor directories must keep their inodes.
 staging=$(mktemp -d "$INSTALL_DIR/service-stage.XXXXXX")
+trap 'rm -rf "$staging"' EXIT HUP INT TERM
 mkdir -p "$staging/log"
 cat > "$staging/run" <<'EOF'
 #!/bin/sh
@@ -36,16 +37,20 @@ mkdir -p /var/log/dbus-tasmota-pv
 exec multilog t s25000 n4 /var/log/dbus-tasmota-pv
 EOF
 chmod +x "$staging/run" "$staging/log/run"
-svc -dx "$SERVICE_DIR" "$SERVICE_DIR/log" 2>/dev/null || true
-sleep 1
-# Backups must be outside /service: svscan treats *.old as another service.
-if [ -e "$SERVICE_DIR" ] && [ ! -L "$SERVICE_DIR" ]; then
-    mv "$SERVICE_DIR" "$INSTALL_DIR/legacy-service.$(date +%s)"
+if [ -d "$SERVICE_DIR" ] && [ ! -L "$SERVICE_DIR" ]; then
+    [ ! -e "$SERVICE_DATA_DIR" ] || {
+        echo 'Conflicting legacy and persistent service directories; preserve both for review.' >&2
+        exit 1
+    }
+    # Rename the legacy directory itself so its supervisor state survives.
+    svc -d "$SERVICE_DIR" 2>/dev/null || true
+    mv "$SERVICE_DIR" "$SERVICE_DATA_DIR"
 fi
-if [ -d "$SERVICE_DATA_DIR" ]; then
-    mv "$SERVICE_DATA_DIR" "$INSTALL_DIR/previous-service.$(date +%s)"
-fi
-mv "$staging" "$SERVICE_DATA_DIR"
+mkdir -p "$SERVICE_DATA_DIR/log"
+svc -d "$SERVICE_DIR" 2>/dev/null || true
+mv "$staging/run" "$SERVICE_DATA_DIR/run"
+mv "$staging/log/run" "$SERVICE_DATA_DIR/log/run"
+rm -f "$SERVICE_DATA_DIR/down"
 ln -sfn "$SERVICE_DATA_DIR" "$SERVICE_DIR"
 cat > "$INSTALL_DIR/boot.sh" <<'EOF'
 #!/bin/sh
@@ -70,6 +75,7 @@ until [ -p "$SERVICE_DIR/supervise/ok" ] || [ "$count" -ge 15 ]; do
     sleep 1
     count=$((count + 1))
 done
-svc -u "$SERVICE_DIR"
+svc -t "$SERVICE_DIR/log" 2>/dev/null || true
+svc -u "$SERVICE_DIR/log" "$SERVICE_DIR"
 svstat "$SERVICE_DIR" "$SERVICE_DIR/log"
 echo 'Installed. Logs: /var/log/dbus-tasmota-pv/current (25 KB x 5 files).'

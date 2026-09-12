@@ -465,9 +465,10 @@ become invalid and `/Connected` becomes zero; cumulative energy stays available.
 Fresh telemetry restores the meter. The timeout uses a monotonic clock.
 
 Run `./install.sh` from the checkout or `/data/dbus-tasmota-pv`. It verifies
-firmware-provided libraries and creates a fresh supervision directory using only
-run scripts, not live supervise FIFOs/locks. Old directories are stored outside
-`/service`, where svscan cannot start duplicate instances. Both stdout and stderr
+firmware-provided libraries and atomically replaces launcher files while keeping
+the service, log and supervisor directory inodes. Legacy real service directories
+are moved intact to persistent storage. The SetupHelper entrypoint uses the same
+installer and records completion with PackageManager. Both stdout and stderr
 reach native `multilog`; logs are bounded to four rotated 25 KB files plus the
 current file under `/var/log/dbus-tasmota-pv`. The `/data/rc.local` boot hook is
 inserted before an existing `exit 0`. No root filesystem remount or pip install

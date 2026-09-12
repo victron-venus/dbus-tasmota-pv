@@ -60,7 +60,7 @@ else:
     DBusGMainLoop = None
     GLib = None
 
-VERSION = "3.0.1"
+VERSION = "3.0.2"
 STALE_AFTER_SECONDS = 90  # no telemetry for this long -> report offline
 TICK_SECONDS = 5  # staleness sweep / heartbeat / GC cadence
 GC_INTERVAL_TICKS = 30  # run GC every 30 ticks (~2.5 minutes)

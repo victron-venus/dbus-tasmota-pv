@@ -16,13 +16,12 @@ fi
 if [ "$scriptAction" == 'INSTALL' ]; then
     logMessage "Installing $packageName"
 
-    # Create directories
-    mkdir -p /data/dbus-tasmota-pv
-    mkdir -p /var/log/dbus-tasmota-pv
-
-    # Install Python script
-    cp "$scriptDir/dbus-tasmota-pv.py" /data/dbus-tasmota-pv/
-    chmod +x /data/dbus-tasmota-pv/*.py
+    # Use the same persistent, inode-preserving service installation as the
+    # direct CLI installer. Keep PackageManager bookkeeping in endScript.
+    if ! sh "$scriptDir/install.sh"; then
+        logMessage "Runtime installation failed"
+        exit 1
+    fi
 fi
 
 #### uninstall
@@ -33,5 +32,6 @@ if [ "$scriptAction" == 'UNINSTALL' ]; then
     rm -rf /data/dbus-tasmota-pv
 fi
 
-# Install/uninstall services and finish
-endScript INSTALL_SERVICE
+# Services are installed explicitly above. INSTALL_SERVICE is not a valid
+# SetupHelper flag (the generic helper accepts INSTALL_SERVICES, plural).
+endScript

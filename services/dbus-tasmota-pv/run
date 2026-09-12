@@ -1,3 +1,4 @@
 #!/bin/sh
+exec 2>&1
 cd /data/dbus-tasmota-pv
 exec python3 dbus-tasmota-pv.py
