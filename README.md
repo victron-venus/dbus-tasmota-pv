@@ -94,6 +94,10 @@ Broker defaults to `127.0.0.1:1883` (the Venus OS broker); override with `--mqtt
 
 ## Installation
 
+Stable release archives include the service launcher, SetupHelper metadata, and
+`SHA256SUMS`. Version 3.0.1 uses MQTT auto-discovery; upgrades from 1.x must
+configure Tasmota telemetry as described below instead of supplying an HTTP device list.
+
 ### Option 1: SetupHelper (Recommended)
 
 The easiest way to install is via [SetupHelper](https://github.com/kwindrem/SetupHelper) PackageManager:
@@ -109,7 +113,7 @@ The easiest way to install is via [SetupHelper](https://github.com/kwindrem/Setu
    - Settings → PackageManager → Inactive packages → **new**
    - Package name: `dbus-tasmota-pv`
    - GitHub user: `victron-venus`
-   - Branch/tag: `latest`
+   - Branch/tag: `v3.0.1`
    - Proceed → Download → Install
 
 3. **Done!** The package will automatically reinstall after Venus OS updates.
@@ -123,7 +127,7 @@ PackageManager discovers packages by scanning `/data/` for directories containin
 
 The `gitHubInfo` file tells PackageManager where to download from:
 ```
-victron-venus:latest
+victron-venus:v3.0.1
 ```
 
 ### Uninstall
@@ -341,7 +345,7 @@ PackageManager's `AddStoredPackages()` requires both a `version` file AND a `set
 **Check**:
 ```bash
 ls -la /data/dbus-tasmota-pv/version /data/dbus-tasmota-pv/setup
-cat /data/dbus-tasmota-pv/gitHubInfo   # should show: victron-venus:latest
+cat /data/dbus-tasmota-pv/gitHubInfo   # should show: victron-venus:v3.0.1
 ```
 
 **Common issues**:
