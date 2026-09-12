@@ -454,3 +454,22 @@ For issues specific to:
 - **This project**: Open an issue in this repository
 
 **Note:** This is a community project and is not affiliated with Victron Energy.
+
+## Venus OS runtime and installation notes
+
+Device registration and all D-Bus writes run on the GLib thread. MQTT bursts
+are coalesced to the latest reading per topic before application. Malformed,
+non-finite, and ENERGY payloads without Power cannot create or refresh a meter.
+After the 90-second telemetry timeout, instantaneous power, voltage, and current
+become invalid and `/Connected` becomes zero; cumulative energy stays available.
+Fresh telemetry restores the meter. The timeout uses a monotonic clock.
+
+Run `./install.sh` from the checkout or `/data/dbus-tasmota-pv`. It verifies
+firmware-provided libraries and atomically replaces launcher files while keeping
+the service, log and supervisor directory inodes. Legacy real service directories
+are moved intact to persistent storage. The SetupHelper entrypoint uses the same
+installer and records completion with PackageManager. Both stdout and stderr
+reach native `multilog`; logs are bounded to four rotated 25 KB files plus the
+current file under `/var/log/dbus-tasmota-pv`. The `/data/rc.local` boot hook is
+inserted before an existing `exit 0`. No root filesystem remount or pip install
+is needed on a supported Venus OS image with paho-mqtt 2.x.
