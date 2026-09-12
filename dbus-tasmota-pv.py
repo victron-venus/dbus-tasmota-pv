@@ -24,12 +24,13 @@ import argparse
 import gc
 import json
 import logging
+import math
 import signal
 import sys
 import threading
 import zlib
 from pathlib import Path
-from time import time
+from time import monotonic, time
 from typing import Any
 
 # paho-mqtt ships preinstalled on Venus OS 3.x (used by dbus-mqtt-* services).
@@ -89,19 +90,21 @@ def parse_energy_payload(
     """Parse a Tasmota ``tele/<topic>/SENSOR`` JSON payload.
 
     Returns ``(power, voltage, current, total, today, yesterday)`` or ``None``
-    when the payload is not JSON or carries no ENERGY object. ``Current`` is
+    when the payload is not JSON or carries no ENERGY block. ``Current`` is
     derived from power/voltage (Tasmota's own reading is ignored for
     consistency).
     """
     try:
         energy = json.loads(payload)["ENERGY"]
-        if not isinstance(energy, dict):
+        if not isinstance(energy, dict) or "Power" not in energy:
             return None
-        power = float(energy.get("Power", 0.0))
+        power = float(energy["Power"])
         voltage = float(energy.get("Voltage", 115.0))
         total = float(energy.get("Total", 0.0))
         today = float(energy.get("Today", 0.0))
         yesterday = float(energy.get("Yesterday", 0.0))
+        if not all(math.isfinite(value) for value in (power, voltage, total, today, yesterday)):
+            return None
         current = round(power / voltage, 2) if voltage > 0 else 0.0
         return power, voltage, current, total, today, yesterday
     except (json.JSONDecodeError, KeyError, TypeError, ValueError):
@@ -114,7 +117,7 @@ class TasmotaPVInverter:
     def __init__(self, topic: str, instance: int):
         self.topic = topic
         self.instance = instance
-        self._last_update = time()
+        self._last_update = monotonic()
         self._connected = True
 
         # Create a private bus connection for each instance to avoid path conflicts
@@ -126,6 +129,7 @@ class TasmotaPVInverter:
         # Mandatory management paths
         self._dbusservice.add_path("/Mgmt/ProcessName", "dbus-tasmota-pv.py")
         self._dbusservice.add_path("/Mgmt/ProcessVersion", VERSION)
+        self._dbusservice.add_path("/Mgmt/Connection", f"MQTT tele/{topic}/SENSOR")
         self._dbusservice.add_path("/ProductName", f"Solar Tasmota {topic}")
         self._dbusservice.add_path("/CustomName", f"Solar Tasmota {topic}")
         self._dbusservice.add_path("/Serial", f"TASMOTA-{topic}")
@@ -151,20 +155,9 @@ class TasmotaPVInverter:
         logger.info(f"Registered PV Inverter: {service_name} (MQTT topic: {topic})")
 
     def _set_paths(self, values: dict[str, Any]) -> None:
-        """Update D-Bus paths safely from any thread.
-
-        The D-Bus service is serviced by the GLib main loop in the main
-        thread, while ``apply()`` runs on the paho-mqtt network thread.
-        Marshal the writes onto the GLib thread via `GLib.idle_add` to avoid
-        concurrent access to the underlying D-Bus connection.
-        """
-
-        def _apply():
-            for path, value in values.items():
-                self._dbusservice[path] = value
-            return False
-
-        GLib.idle_add(_apply)
+        """Update D-Bus paths on the GLib thread."""
+        for path, value in values.items():
+            self._dbusservice[path] = value
 
     def apply(
         self,
@@ -176,7 +169,7 @@ class TasmotaPVInverter:
         yesterday: float,
     ):
         """Push a fresh ENERGY reading onto D-Bus."""
-        self._last_update = time()
+        self._last_update = monotonic()
         if not self._connected:
             self._connected = True
             logger.info(f"Tasmota {self.topic} back online")
@@ -199,7 +192,7 @@ class TasmotaPVInverter:
         """Mark the device offline when no telemetry arrived recently."""
         if not self._connected:
             return
-        if time() - self._last_update > STALE_AFTER_SECONDS:
+        if monotonic() - self._last_update > STALE_AFTER_SECONDS:
             self._connected = False
             logger.warning(
                 f"Tasmota {self.topic}: no telemetry for {STALE_AFTER_SECONDS}s, marking offline"
@@ -208,8 +201,10 @@ class TasmotaPVInverter:
                 {
                     _PATH_ERROR_CODE: 1,  # Offline/comm error
                     _PATH_CONNECTED: 0,
-                    _PATH_AC_POWER: 0.0,
-                    _PATH_AC_L1_POWER: 0.0,
+                    _PATH_AC_POWER: None,
+                    _PATH_AC_L1_POWER: None,
+                    _PATH_AC_L1_VOLTAGE: None,
+                    _PATH_AC_L1_CURRENT: None,
                 }
             )
 
@@ -254,6 +249,8 @@ class MqttEnergyListener:
         # _on_message runs on the paho network thread while tick() iterates
         # the registry on the GLib thread; guard both sides.
         self._lock = threading.Lock()
+        self._pending = {}
+        self._pending_scheduled = False
         self._client = MqttClient(
             callback_api_version=CallbackAPIVersion.VERSION2,
             client_id="dbus-tasmota-pv",
@@ -321,12 +318,30 @@ class MqttEnergyListener:
         if parsed is None:
             # Non-energy plugs also publish tele/+/SENSOR; only complain for
             # devices we already know should carry ENERGY data.
-            level = logging.WARNING if self.inverters() else logging.DEBUG
+            with self._lock:
+                known = topic in self._inverters
+            level = logging.WARNING if known else logging.DEBUG
             logger.log(level, f"Tasmota {topic}: unparseable SENSOR payload")
             return
-        inverter = self._get_or_create(topic)
-        if inverter is not None:
-            inverter.apply(*parsed)
+        # Registration and path writes both belong to GLib, not paho's
+        # network thread. Coalesce bursts to one latest reading per device.
+        with self._lock:
+            self._pending[topic] = parsed
+            if self._pending_scheduled:
+                return
+            self._pending_scheduled = True
+        GLib.idle_add(self._apply_pending)
+
+    def _apply_pending(self) -> bool:
+        with self._lock:
+            pending = self._pending
+            self._pending = {}
+            self._pending_scheduled = False
+        for topic, parsed in pending.items():
+            inverter = self._get_or_create(topic)
+            if inverter is not None:
+                inverter.apply(*parsed)
+        return False
 
 
 def _write_heartbeat(heartbeat_file: str) -> None:

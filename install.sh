@@ -1,150 +1,75 @@
-#!/bin/bash
-#
-# dbus-tasmota-pv installer for Venus OS
-# Creates a proper daemontools service that survives reboot
-#
-# Usage: ./install.sh
-#
-
-set -e
-
-readonly SEPARATOR='=============================================='
-
-INSTALL_DIR="/data/dbus-tasmota-pv"
-SERVICE_DIR="/service/dbus-tasmota-pv"
-
-echo "$SEPARATOR"
-echo "  dbus-tasmota-pv Installer for Venus OS"
-echo "$SEPARATOR"
-echo ""
-
-# Check for required files
-if [[ ! -f "dbus-tasmota-pv.py" ]] && [[ ! -f "$INSTALL_DIR/dbus-tasmota-pv.py" ]]; then
-    echo "Error: dbus-tasmota-pv.py not found" >&2
-    exit 1
-fi
-
-# Create install directory
-mkdir -p "$INSTALL_DIR"
-
-# Copy Python script (skip if already in target directory)
-if [[ -f "dbus-tasmota-pv.py" ]] && [[ "$(pwd)" != "$INSTALL_DIR" ]]; then
-    cp dbus-tasmota-pv.py "$INSTALL_DIR/"
-    chmod +x "$INSTALL_DIR/dbus-tasmota-pv.py"
-    echo "Copied dbus-tasmota-pv.py to $INSTALL_DIR"
-elif [[ -f "$INSTALL_DIR/dbus-tasmota-pv.py" ]]; then
-    chmod +x "$INSTALL_DIR/dbus-tasmota-pv.py"
-    echo "Using existing $INSTALL_DIR/dbus-tasmota-pv.py"
-fi
-
-# Devices are auto-discovered via MQTT (tele/+/SENSOR); no config file needed.
-# Clean up a config left behind by a previous (<3.0.0) install.
-if [[ -f "$INSTALL_DIR/config.json" ]]; then
-    rm "$INSTALL_DIR/config.json"
-    echo "Removed obsolete $INSTALL_DIR/config.json (devices are now auto-discovered)"
-fi
-
-# Remove old symlink if exists and create proper directory
-if [[ -L "$SERVICE_DIR" ]]; then
-    echo "Removing old symlink..."
-    rm -f "$SERVICE_DIR"
-fi
-
-# Create service directory structure in /data (persists across reboots)
-SERVICE_DATA_DIR="/data/dbus-tasmota-pv/service/dbus-tasmota-pv"
-echo ">>> Setting up daemontools service in $SERVICE_DATA_DIR..."
-mkdir -p "$SERVICE_DATA_DIR/log"
-
-# Run script: stdout/stderr are captured by the paired multilog (log/run
-# below), matching the stock Venus OS service layout. A plain-file redirect
-# here leaves the service without a usable log/run, which spams readproctitle
-# with "unable to start log/run" on every supervise restart.
-cat > "$SERVICE_DATA_DIR/run" << 'EOF'
 #!/bin/sh
+# Persistent Venus OS daemontools installation, using bundled Python libraries.
+set -eu
+INSTALL_DIR=/data/dbus-tasmota-pv
+SERVICE_DATA_DIR=$INSTALL_DIR/service/dbus-tasmota-pv
+SERVICE_DIR=/service/dbus-tasmota-pv
+SCRIPT_DIR=$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd)
+[ "$(id -u)" -eq 0 ] || { echo 'Run as root.' >&2; exit 1; }
+command -v svc >/dev/null
+command -v multilog >/dev/null
+python3 - <<'PY'
+import sys
+sys.path.insert(0, '/opt/victronenergy/dbus-systemcalc-py/ext/velib_python')
+from vedbus import VeDbusService
+from gi.repository import GLib
+from paho.mqtt.client import CallbackAPIVersion
+PY
+mkdir -p "$INSTALL_DIR/service"
+if [ "$SCRIPT_DIR" != "$INSTALL_DIR" ]; then
+    cp "$SCRIPT_DIR/dbus-tasmota-pv.py" "$INSTALL_DIR/"
+fi
+python3 -m py_compile "$INSTALL_DIR/dbus-tasmota-pv.py"
+# Keep a fresh directory inode without copying supervise locks and FIFOs.
+staging=$(mktemp -d "$INSTALL_DIR/service-stage.XXXXXX")
+mkdir -p "$staging/log"
+cat > "$staging/run" <<'EOF'
+#!/bin/sh
+exec 2>&1
 cd /data/dbus-tasmota-pv || exit 1
-exec python3 dbus-tasmota-pv.py
+exec python3 -u dbus-tasmota-pv.py
 EOF
-chmod +x "$SERVICE_DATA_DIR/run"
-
-cat > "$SERVICE_DATA_DIR/log/run" << 'EOF'
+cat > "$staging/log/run" <<'EOF'
 #!/bin/sh
+exec 2>&1
+mkdir -p /var/log/dbus-tasmota-pv
 exec multilog t s25000 n4 /var/log/dbus-tasmota-pv
 EOF
-chmod +x "$SERVICE_DATA_DIR/log/run"
-
-# Create /service symlink (will be recreated by rc.local on boot).
-# A pre-3.0 install left a real directory at $SERVICE_DIR; `ln -sf` cannot
-# replace it, leaving the old run script crashlooping. Move it aside instead.
-if [[ -d "$SERVICE_DIR" && ! -L "$SERVICE_DIR" ]]; then
-    echo ">>> Replacing legacy service directory at $SERVICE_DIR..."
-    mv "$SERVICE_DIR" "${SERVICE_DIR}.old.$(date +%s)"
-fi
-ln -sf "$SERVICE_DATA_DIR" "$SERVICE_DIR"
-
-# svscan caches each /service entry by directory inode and never re-evaluates
-# whether it has a log pair; an entry first seen without log/run stays
-# single-supervise forever (readproctitle "unable to start log/run", stdout
-# lost in the 1KB ring). Stop the old supervision cleanly and replace the
-# directory with a fresh-inode copy so svscan creates a full service+log pair.
-svc -dx "$SERVICE_DIR" 2>/dev/null || true
+chmod +x "$staging/run" "$staging/log/run"
+svc -dx "$SERVICE_DIR" "$SERVICE_DIR/log" 2>/dev/null || true
 sleep 1
-cp -a "$SERVICE_DATA_DIR" "$SERVICE_DATA_DIR.new"
-mv "$SERVICE_DATA_DIR" "$SERVICE_DATA_DIR.old"
-mv "$SERVICE_DATA_DIR.new" "$SERVICE_DATA_DIR"
-rm -rf "$SERVICE_DATA_DIR.old"
-
-echo "Created service at $SERVICE_DIR"
-echo ""
-
-# Add rc.local entry for boot persistence
-RC_LOCAL="/data/rc.local"
-if [ ! -f "$RC_LOCAL" ]; then
-    echo "#!/bin/sh" > "$RC_LOCAL"
-    chmod +x "$RC_LOCAL"
+# Backups must be outside /service: svscan treats *.old as another service.
+if [ -e "$SERVICE_DIR" ] && [ ! -L "$SERVICE_DIR" ]; then
+    mv "$SERVICE_DIR" "$INSTALL_DIR/legacy-service.$(date +%s)"
 fi
-
-if ! grep -q "dbus-tasmota-pv" "$RC_LOCAL" 2>/dev/null; then
-    cat >> "$RC_LOCAL" << 'EOF'
-
-# === dbus-tasmota-pv service persistence ===
-# Recreate /service symlink on boot (lost since /service is tmpfs)
-ln -sf /data/dbus-tasmota-pv/service/dbus-tasmota-pv /service/dbus-tasmota-pv
-sleep 2
-svc -u /service/dbus-tasmota-pv 2>/dev/null || true
-# === end dbus-tasmota-pv ===
-
+if [ -d "$SERVICE_DATA_DIR" ]; then
+    mv "$SERVICE_DATA_DIR" "$INSTALL_DIR/previous-service.$(date +%s)"
+fi
+mv "$staging" "$SERVICE_DATA_DIR"
+ln -sfn "$SERVICE_DATA_DIR" "$SERVICE_DIR"
+cat > "$INSTALL_DIR/boot.sh" <<'EOF'
+#!/bin/sh
+[ -x /data/dbus-tasmota-pv/service/dbus-tasmota-pv/run ] || exit 0
+ln -sfn /data/dbus-tasmota-pv/service/dbus-tasmota-pv /service/dbus-tasmota-pv
 EOF
-    echo "Added boot persistence to $RC_LOCAL"
-else
-    echo "Boot persistence already configured in $RC_LOCAL"
-fi
-
-echo "Note: Service will auto-start on boot via rc.local."
-
-echo ""
-echo "$SEPARATOR"
-echo "  Installation Complete!"
-echo "$SEPARATOR"
-echo ""
-echo "Service will start automatically now and on reboot."
-echo "(rc.local recreates /service symlink on boot since /service is tmpfs)"
-echo ""
-echo "Commands:"
-echo "  Status:   svstat /service/dbus-tasmota-pv"
-echo "  Restart:  svc -t /service/dbus-tasmota-pv"
-echo "  Stop:     svc -d /service/dbus-tasmota-pv"
-echo "  Errors:   tail -f /var/log/dbus-tasmota-pv/current"
-echo ""
-
-# Wait for daemontools to pick up the new service.  svscan polls /service
-# every ~5s, so svstat too early would fail with "unable to open
-# supervise/ok".  Poll for the FIFO that supervise creates on startup.
-for _ in $(seq 1 20); do
-    if [[ -p "$SERVICE_DIR/supervise/ok" ]]; then
-        break
-    fi
+chmod +x "$INSTALL_DIR/boot.sh"
+python3 - <<'PY'
+from pathlib import Path
+path = Path('/data/rc.local')
+text = path.read_text() if path.exists() else '#!/bin/sh\n'
+command = '/data/dbus-tasmota-pv/boot.sh'
+if command not in text.splitlines():
+    lines = text.splitlines()
+    index = next((i for i, line in enumerate(lines) if line.strip() == 'exit 0'), len(lines))
+    lines.insert(index, command)
+    path.write_text('\n'.join(lines) + '\n')
+path.chmod(path.stat().st_mode | 0o111)
+PY
+count=0
+until [ -p "$SERVICE_DIR/supervise/ok" ] || [ "$count" -ge 15 ]; do
     sleep 1
+    count=$((count + 1))
 done
-
-# Show service status
-svstat "$SERVICE_DIR" "$SERVICE_DIR/log" 2>/dev/null || echo "Service starting..."
+svc -u "$SERVICE_DIR"
+svstat "$SERVICE_DIR" "$SERVICE_DIR/log"
+echo 'Installed. Logs: /var/log/dbus-tasmota-pv/current (25 KB x 5 files).'

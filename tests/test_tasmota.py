@@ -13,7 +13,7 @@ import importlib.util
 import json
 import sys
 from pathlib import Path
-from time import time
+from time import monotonic as time
 from types import ModuleType
 from unittest.mock import MagicMock
 
@@ -46,6 +46,7 @@ _spec.loader.exec_module(_mod)
 _mod.dbus = MagicMock()
 _mod.VeDbusService = MagicMock()
 _mod.GLib = MagicMock()
+_mod.GLib.idle_add.side_effect = lambda callback, *args: callback(*args)
 
 TasmotaPVInverter = _mod.TasmotaPVInverter
 MqttEnergyListener = _mod.MqttEnergyListener
@@ -150,14 +151,9 @@ class TestParseEnergyPayload:
         assert today == pytest.approx(1.0)
         assert yesterday == pytest.approx(0.0)
 
-    def test_missing_power_defaults_zero(self) -> None:
+    def test_missing_power_is_not_a_fresh_measurement(self) -> None:
         payload = json.dumps({"ENERGY": {"Voltage": 230, "Total": 100, "Today": 5.0}})
-        power, voltage, current, total, today, _yesterday = parse_energy_payload(payload)
-        assert power == pytest.approx(0.0)
-        assert voltage == pytest.approx(230.0)
-        assert current == pytest.approx(0.0)
-        assert total == pytest.approx(100.0)
-        assert today == pytest.approx(5.0)
+        assert parse_energy_payload(payload) is None
 
     def test_missing_voltage_defaults_115(self) -> None:
         payload = json.dumps({"ENERGY": {"Power": 100, "Total": 50, "Today": 2.5}})
@@ -176,14 +172,11 @@ class TestParseEnergyPayload:
         assert today == pytest.approx(1.0)
 
     def test_empty_energy_dict(self) -> None:
-        payload = json.dumps({"Time": "2026-08-21T12:00:00", "ENERGY": {}})
-        power, voltage, current, total, today, yesterday = parse_energy_payload(payload)
-        assert power == pytest.approx(0.0)
-        assert voltage == pytest.approx(115.0)
-        assert current == pytest.approx(0.0)
-        assert total == pytest.approx(0.0)
-        assert today == pytest.approx(0.0)
-        assert yesterday == pytest.approx(0.0)
+        assert parse_energy_payload('{"ENERGY": {}}') is None
+
+    @pytest.mark.parametrize("energy", [None, [], "oops", {"Power": "nan"}, {"Power": "inf"}])
+    def test_invalid_energy_is_ignored(self, energy) -> None:
+        assert parse_energy_payload(json.dumps({"ENERGY": energy})) is None
 
     def test_missing_energy_key_returns_none(self) -> None:
         assert parse_energy_payload('{"Time":"2026-08-21T12:00:00"}') is None
@@ -314,6 +307,27 @@ class TestMqttDiscovery:
         inv = listener.inverters()[0]
         assert inv._connected is True
         assert time() - inv._last_update < 5
+
+
+def test_discovery_and_writes_wait_for_glib(monkeypatch):
+    pending = []
+    monkeypatch.setattr(_mod.GLib, "idle_add", pending.append)
+    listener = MqttEnergyListener("127.0.0.1", 1883)
+    listener._on_message(None, None, _sensor_msg("plug", {"Power": 10}))
+    listener._on_message(None, None, _sensor_msg("plug", {"Power": 20}))
+    assert listener.inverters() == []
+    assert len(pending) == 1
+    assert pending.pop()() is False
+    inverter = listener.inverters()[0]
+    inverter._dbusservice.__setitem__.assert_any_call("/Ac/Power", 20.0)
+
+
+def test_stale_reading_invalidates_current_and_voltage():
+    inv = _make_inverter()
+    inv._last_update = time() - 100
+    inv.check_stale()
+    for path in ("/Ac/Power", "/Ac/L1/Current", "/Ac/L1/Voltage"):
+        inv._dbusservice.__setitem__.assert_any_call(path, None)
 
 
 @pytest.mark.parametrize("energy", [None, [], "invalid", 42, True])
