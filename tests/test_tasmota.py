@@ -317,8 +317,10 @@ class TestMqttDiscovery:
 
 
 @pytest.mark.parametrize("energy", [None, [], "invalid", 42, True])
-def test_non_object_energy_does_not_interrupt_following_telemetry(energy) -> None:
+def test_non_object_energy_does_not_interrupt_following_telemetry(energy, monkeypatch) -> None:
     """Malformed ENERGY blocks must not escape the MQTT callback."""
+    monkeypatch.setattr(_mod, "MqttClient", MagicMock())
+    monkeypatch.setattr(_mod, "CallbackAPIVersion", MagicMock())
     listener = MqttEnergyListener("localhost", 1883)
     listener._get_or_create = MagicMock()
     invalid = MagicMock(topic="tele/plug/SENSOR")
