@@ -6,3 +6,8 @@ __pycache__/
 config.local.json
 *.backup
 .DS_Store
+
+# Local validation and candidate packaging
+.venv-ci/
+release-dist/
+bandit-results.json
