@@ -11,3 +11,7 @@ config.local.json
 .venv-ci/
 release-dist/
 bandit-results.json
+
+# Local coverage data
+.coverage
+.coverage.*
