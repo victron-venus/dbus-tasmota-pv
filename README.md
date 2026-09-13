@@ -24,19 +24,17 @@ Venus OS driver for Tasmota smart plugs monitoring inline PV inverters.
 
 ---
 
-## Release Channels & CI/CD
+<!-- ci-release-process:start -->
+## Release process
 
-This repository provides automated build archives for Victron Venus OS installations:
-
-- **Stable Releases**: Tagged as `vX.Y.Z` (e.g., `v1.0.0`). Contains packaged Venus OS installer tarballs (`dbus-tasmota-pv-*.tar.gz`).
-- **Pre-releases**: Tagged with `-rc.N` or `-beta.N`. Automatically flagged as Pre-release on GitHub Releases.
-- **Nightly Builds**: Built daily at 02:00 UTC. Generates a fresh `dbus-tasmota-pv-nightly.tar.gz` package published to the **[Nightly Build Release](https://github.com/victron-venus/dbus-tasmota-pv/releases/tag/nightly)**.
+See the [release strategy](RELEASING.md) for validation, nightly, beta, RC and stable promotion rules, and the [operator runbook](docs/release-workflow.md) for local commands.
+<!-- ci-release-process:end -->
 
 ---
 
 ## Completed Features
 
-- ✅ **CI/CD Releases & Nightly Builds**: Installer packaging workflows configured for automated releases
+- ✅ **Release packaging**: Candidate artifacts and checksums; see the [release strategy](RELEASING.md).
 
 ---
 

@@ -1,0 +1,13 @@
+{
+  "name": "dbus-tasmota-pv",
+  "include": [
+    "dbus-tasmota-pv.py",
+    "setup",
+    "gitHubInfo",
+    "version",
+    "install.sh",
+    "services",
+    "README.md",
+    "LICENSE"
+  ]
+}
