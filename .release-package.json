@@ -8,6 +8,9 @@
     "install.sh",
     "services",
     "README.md",
-    "LICENSE"
+    "LICENSE",
+    ".python-version",
+    "pyproject.toml",
+    "uv.lock"
   ]
 }

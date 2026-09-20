@@ -1,3 +1,19 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "dbus-tasmota-pv"
+version = "3.0.3"
+requires-python = ">=3.12,<3.13"
+dependencies = ["paho-mqtt>=2.1.0"]
+
+[project.optional-dependencies]
+dev = ["pytest>=9.1.1", "pytest-cov>=7.1.0"]
+
+[tool.setuptools]
+py-modules = ["dbus-tasmota-pv"]
+
 [tool.pylint.messages_control]
 ignore-paths = ["^.venv/"]
 disable = [
@@ -18,7 +34,7 @@ disable = [
 
 [tool.ruff]
 line-length = 100
-target-version = "py311"
+target-version = "py312"
 
 [tool.ruff.lint]
 ignore = [

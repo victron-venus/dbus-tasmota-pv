@@ -19,3 +19,6 @@ bandit-results.json
 .release-plan.json
 .release-inputs.json
 release-assets/
+
+# Local Python build metadata
+*.egg-info/
