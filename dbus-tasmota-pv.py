@@ -106,8 +106,10 @@ def parse_energy_payload(
         if not all(math.isfinite(value) for value in (power, voltage, total, today, yesterday)):
             return None
         current = round(power / voltage, 2) if voltage > 0 else 0.0
+        if not math.isfinite(current):
+            return None
         return power, voltage, current, total, today, yesterday
-    except (json.JSONDecodeError, KeyError, TypeError, ValueError):
+    except (json.JSONDecodeError, KeyError, TypeError, ValueError, OverflowError):
         return None
 
 
@@ -167,9 +169,14 @@ class TasmotaPVInverter:
         total: float,
         today: float,
         yesterday: float,
+        *,
+        received_at: float | None = None,
     ):
         """Push a fresh ENERGY reading onto D-Bus."""
-        self._last_update = monotonic()
+        self._last_update = monotonic() if received_at is None else received_at
+        if monotonic() - self._last_update > STALE_AFTER_SECONDS:
+            self.check_stale()
+            return
         if not self._connected:
             self._connected = True
             logger.info(f"Tasmota {self.topic} back online")
@@ -310,6 +317,7 @@ class MqttEnergyListener:
         logger.warning(f"MQTT disconnected ({reason_code}); auto-reconnect in progress")
 
     def _on_message(self, client, userdata, msg):
+        received_at = monotonic()
         topic = topic_from_mqtt_topic(msg.topic)
         if topic is None:
             logger.debug(f"Ignoring message on unexpected topic: {msg.topic}")
@@ -326,7 +334,7 @@ class MqttEnergyListener:
         # Registration and path writes both belong to GLib, not paho's
         # network thread. Coalesce bursts to one latest reading per device.
         with self._lock:
-            self._pending[topic] = parsed
+            self._pending[topic] = (parsed, received_at)
             if self._pending_scheduled:
                 return
             self._pending_scheduled = True
@@ -337,10 +345,12 @@ class MqttEnergyListener:
             pending = self._pending
             self._pending = {}
             self._pending_scheduled = False
-        for topic, parsed in pending.items():
+        for topic, (parsed, received_at) in pending.items():
+            if monotonic() - received_at > STALE_AFTER_SECONDS:
+                continue
             inverter = self._get_or_create(topic)
             if inverter is not None:
-                inverter.apply(*parsed)
+                inverter.apply(*parsed, received_at=received_at)
         return False
 
 

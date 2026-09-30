@@ -333,11 +333,134 @@ def test_stale_reading_invalidates_current_and_voltage():
         inv._dbusservice.__setitem__.assert_any_call(path, None)
 
 
+@pytest.mark.parametrize(
+    "energy",
+    [
+        {"Power": 10**400},
+        {"Power": 1, "Voltage": 10**400},
+        {"Power": 1, "Total": 10**400},
+        {"Power": 1, "Today": 10**400},
+        {"Power": 1, "Yesterday": 10**400},
+        {"Power": 1e308, "Voltage": 1e-308},
+    ],
+)
+def test_nonrepresentable_energy_rejected(energy):
+    assert parse_energy_payload(json.dumps({"ENERGY": energy})) is None
+
+
+@pytest.mark.parametrize("delay", [90.001, 300.0])
+def test_expired_queued_telemetry_does_not_discover_device(monkeypatch, delay):
+    now = [100.0]
+    monkeypatch.setattr(_mod, "monotonic", lambda: now[0])
+    pending = []
+    monkeypatch.setattr(_mod.GLib, "idle_add", pending.append)
+    listener = MqttEnergyListener("localhost", 1883)
+    listener._on_message(None, None, _sensor_msg("plug", {"Power": 10}))
+    now[0] += delay
+    assert pending.pop()() is False
+    assert listener.inverters() == []
+
+
+def test_expired_queued_telemetry_cannot_revive_existing_device(monkeypatch):
+    now = [100.0]
+    monkeypatch.setattr(_mod, "monotonic", lambda: now[0])
+    listener = MqttEnergyListener("localhost", 1883)
+    listener._on_message(None, None, _sensor_msg("plug", {"Power": 10}))
+    inverter = listener.inverters()[0]
+    pending = []
+    monkeypatch.setattr(_mod.GLib, "idle_add", pending.append)
+    listener._on_message(None, None, _sensor_msg("plug", {"Power": 20}))
+    now[0] = 191.0
+    inverter.check_stale()
+    inverter._dbusservice.__setitem__.reset_mock()
+    assert pending.pop()() is False
+    assert not inverter._connected
+    inverter._dbusservice.__setitem__.assert_not_called()
+
+    listener._on_message(None, None, _sensor_msg("plug", {"Power": 30}))
+    assert pending.pop()() is False
+    assert inverter._connected
+    inverter._dbusservice.__setitem__.assert_any_call("/Ac/Power", 30.0)
+
+
+def test_coalesced_power_expires_from_latest_receipt(monkeypatch):
+    now = [100.0]
+    monkeypatch.setattr(_mod, "monotonic", lambda: now[0])
+    pending = []
+    monkeypatch.setattr(_mod.GLib, "idle_add", pending.append)
+    listener = MqttEnergyListener("localhost", 1883)
+    listener._on_message(None, None, _sensor_msg("plug", {"Power": 10}))
+    now[0] = 150.0
+    listener._on_message(None, None, _sensor_msg("plug", {"Power": 20}))
+    assert len(pending) == 1
+    now[0] = 200.0
+    assert pending.pop()() is False
+    inverter = listener.inverters()[0]
+    assert inverter._connected
+    inverter._dbusservice.__setitem__.assert_any_call("/Ac/Power", 20.0)
+    now[0] = 240.0
+    inverter.check_stale()
+    assert inverter._connected
+    now[0] += 0.001
+    inverter.check_stale()
+    assert not inverter._connected
+
+
+def test_power_that_expires_during_registration_is_never_published(monkeypatch):
+    now = [100.0]
+    monkeypatch.setattr(_mod, "monotonic", lambda: now[0])
+    pending = []
+    monkeypatch.setattr(_mod.GLib, "idle_add", pending.append)
+    listener = MqttEnergyListener("localhost", 1883)
+    original = listener._get_or_create
+
+    def create(topic):
+        inverter = original(topic)
+        inverter._dbusservice.__setitem__.reset_mock()
+        now[0] += 2
+        return inverter
+
+    monkeypatch.setattr(listener, "_get_or_create", create)
+    listener._on_message(None, None, _sensor_msg("plug", {"Power": 10}))
+    now[0] = 189.0
+    assert pending.pop()() is False
+    inverter = listener.inverters()[0]
+    assert not inverter._connected
+    power_writes = [
+        value
+        for (path, value), _ in inverter._dbusservice.__setitem__.call_args_list
+        if path == "/Ac/Power"
+    ]
+    assert power_writes == [None]
+
+
+@pytest.mark.parametrize(
+    "invalid_energy", [{"Power": 10**400}, {"Power": 1e308, "Voltage": 1e-308}]
+)
+def test_invalid_numeric_message_preserves_state_and_next_sample(monkeypatch, invalid_energy):
+    now = [100.0]
+    monkeypatch.setattr(_mod, "monotonic", lambda: now[0])
+    listener = MqttEnergyListener("localhost", 1883)
+    listener._on_message(None, None, _sensor_msg("plug", {"Power": 10}))
+    inverter = listener.inverters()[0]
+    inverter._dbusservice.__setitem__.reset_mock()
+    now[0] = 150.0
+    listener._on_message(None, None, _sensor_msg("plug", invalid_energy))
+    assert inverter._last_update == 100.0
+    inverter._dbusservice.__setitem__.assert_not_called()
+    listener._on_message(None, None, _sensor_msg("plug", {"Power": 20, "Voltage": 250}))
+    assert listener.inverters() == [inverter]
+    assert inverter._last_update == 150.0
+    inverter._dbusservice.__setitem__.assert_any_call("/Ac/Power", 20.0)
+    inverter._dbusservice.__setitem__.assert_any_call("/Ac/L1/Current", 0.08)
+
+
 @pytest.mark.parametrize("energy", [None, [], "invalid", 42, True])
 def test_non_object_energy_does_not_interrupt_following_telemetry(energy, monkeypatch) -> None:
     """Malformed ENERGY blocks must not escape the MQTT callback."""
     monkeypatch.setattr(_mod, "MqttClient", MagicMock())
     monkeypatch.setattr(_mod, "CallbackAPIVersion", MagicMock())
+    monkeypatch.setattr(_mod, "monotonic", lambda: 100.0)
     listener = MqttEnergyListener("localhost", 1883)
     listener._get_or_create = MagicMock()
     invalid = MagicMock(topic="tele/plug/SENSOR")
@@ -348,5 +471,5 @@ def test_non_object_energy_does_not_interrupt_following_telemetry(energy, monkey
     listener._on_message(None, None, _sensor_msg("plug", {"Power": 125, "Voltage": 250}))
     listener._get_or_create.assert_called_once_with("plug")
     listener._get_or_create.return_value.apply.assert_called_once_with(
-        125.0, 250.0, 0.5, 0.0, 0.0, 0.0
+        125.0, 250.0, 0.5, 0.0, 0.0, 0.0, received_at=100.0
     )

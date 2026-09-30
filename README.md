@@ -465,8 +465,10 @@ For issues specific to:
 ## Venus OS runtime and installation notes
 
 Device registration and all D-Bus writes run on the GLib thread. MQTT bursts
-are coalesced to the latest reading per topic before application. Malformed,
-non-finite, and ENERGY payloads without Power cannot create or refresh a meter.
+are coalesced to the latest reading per topic before application, preserving
+the MQTT receipt time. Queue delays cannot extend a sample's freshness.
+Malformed, overflowing, non-finite, and ENERGY payloads without Power cannot
+create or refresh a meter; derived current must also be finite.
 After the 90-second telemetry timeout, instantaneous power, voltage, and current
 become invalid and `/Connected` becomes zero; cumulative energy stays available.
 Fresh telemetry restores the meter. The timeout uses a monotonic clock.
