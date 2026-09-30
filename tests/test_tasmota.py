@@ -357,7 +357,8 @@ def test_expired_queued_telemetry_does_not_discover_device(monkeypatch, delay):
     listener = MqttEnergyListener("localhost", 1883)
     listener._on_message(None, None, _sensor_msg("plug", {"Power": 10}))
     now[0] += delay
-    assert pending.pop()() is False
+    dispatch_result = pending.pop()()
+    assert dispatch_result is False
     assert listener.inverters() == []
 
 
@@ -373,12 +374,14 @@ def test_expired_queued_telemetry_cannot_revive_existing_device(monkeypatch):
     now[0] = 191.0
     inverter.check_stale()
     inverter._dbusservice.__setitem__.reset_mock()
-    assert pending.pop()() is False
+    dispatch_result = pending.pop()()
+    assert dispatch_result is False
     assert not inverter._connected
     inverter._dbusservice.__setitem__.assert_not_called()
 
     listener._on_message(None, None, _sensor_msg("plug", {"Power": 30}))
-    assert pending.pop()() is False
+    dispatch_result = pending.pop()()
+    assert dispatch_result is False
     assert inverter._connected
     inverter._dbusservice.__setitem__.assert_any_call("/Ac/Power", 30.0)
 
@@ -394,7 +397,8 @@ def test_coalesced_power_expires_from_latest_receipt(monkeypatch):
     listener._on_message(None, None, _sensor_msg("plug", {"Power": 20}))
     assert len(pending) == 1
     now[0] = 200.0
-    assert pending.pop()() is False
+    dispatch_result = pending.pop()()
+    assert dispatch_result is False
     inverter = listener.inverters()[0]
     assert inverter._connected
     inverter._dbusservice.__setitem__.assert_any_call("/Ac/Power", 20.0)
@@ -423,7 +427,8 @@ def test_power_that_expires_during_registration_is_never_published(monkeypatch):
     monkeypatch.setattr(listener, "_get_or_create", create)
     listener._on_message(None, None, _sensor_msg("plug", {"Power": 10}))
     now[0] = 189.0
-    assert pending.pop()() is False
+    dispatch_result = pending.pop()()
+    assert dispatch_result is False
     inverter = listener.inverters()[0]
     assert not inverter._connected
     power_writes = [

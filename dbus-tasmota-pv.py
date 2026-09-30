@@ -109,7 +109,7 @@ def parse_energy_payload(
         if not math.isfinite(current):
             return None
         return power, voltage, current, total, today, yesterday
-    except (json.JSONDecodeError, KeyError, TypeError, ValueError, OverflowError):
+    except (KeyError, TypeError, ValueError, OverflowError):
         return None
 
 
