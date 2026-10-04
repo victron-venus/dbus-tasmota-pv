@@ -41,7 +41,7 @@ Thank you for your interest in contributing!
 ### Testing
 
 - Test with actual Tasmota devices
-- Verify HTTP polling works
+- Verify fresh MQTT SENSOR data, retained-message rejection, and LWT offline handling
 - Check D-Bus service registration
 - Verify PV data appears in VRM Portal / GUI
 
@@ -52,8 +52,12 @@ Thank you for your interest in contributing!
 git clone https://github.com/victron-venus/dbus-tasmota-pv.git
 cd dbus-tasmota-pv
 
-# Test locally
-python3 dbus-tasmota-pv.py --devices 192.168.1.100:40
+# Install the local test tools (hardware and D-Bus are mocked in unit tests)
+bash scripts/ci.sh --install
+bash scripts/ci.sh
+
+# Run on Venus OS using its native Python/D-Bus libraries
+python3 dbus-tasmota-pv.py --mqtt-host 127.0.0.1
 ```
 
 ## Questions?

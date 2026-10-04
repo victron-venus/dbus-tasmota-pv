@@ -34,6 +34,27 @@
         "value": "package",
         "field": "VERSION",
         "ecosystem": "pep440"
+      },
+      {
+        "path": "pyproject.toml",
+        "format": "toml",
+        "field": "project.version",
+        "package": "dbus-tasmota-pv",
+        "value": "package",
+        "ecosystem": "pep440"
+      },
+      {
+        "path": "uv.lock",
+        "format": "uv-lock",
+        "package": "dbus-tasmota-pv",
+        "value": "package",
+        "ecosystem": "pep440"
+      },
+      {
+        "path": "gitHubInfo",
+        "format": "text",
+        "value": "package",
+        "prefix": "victron-venus:v"
       }
     ],
     "artifacts": [
@@ -43,6 +64,22 @@
         "value": "package",
         "member": "dbus-tasmota-pv/version",
         "prefix": "v"
+      },
+      {
+        "path": "dbus-tasmota-pv-*.tar.gz",
+        "format": "tar-toml",
+        "value": "package",
+        "member": "dbus-tasmota-pv/pyproject.toml",
+        "field": "project.version",
+        "package": "dbus-tasmota-pv",
+        "ecosystem": "pep440"
+      },
+      {
+        "path": "dbus-tasmota-pv-*.tar.gz",
+        "format": "tar-text",
+        "value": "package",
+        "member": "dbus-tasmota-pv/gitHubInfo",
+        "prefix": "victron-venus:v"
       }
     ],
     "toolkit_revision": "fca833a9da6b49116444ffd7ac6739e08f9cbc61"

@@ -15,7 +15,6 @@ import sys
 from pathlib import Path
 from time import monotonic as time
 from types import ModuleType
-from typing import ClassVar
 from unittest.mock import MagicMock
 
 import pytest
@@ -38,6 +37,7 @@ sys.modules["gi.repository"] = mock_glib
 
 # The source file has hyphens in its name, so use importlib to load it.
 _src = Path(__file__).resolve().parent.parent / "dbus-tasmota-pv.py"
+sys.path.insert(0, str(_src.parent))
 _spec = importlib.util.spec_from_file_location("dbus_tasmota_pv", _src)
 _mod = importlib.util.module_from_spec(_spec)
 sys.modules["dbus_tasmota_pv"] = _mod
@@ -48,6 +48,45 @@ _mod.dbus = MagicMock()
 _mod.VeDbusService = MagicMock()
 _mod.GLib = MagicMock()
 _mod.GLib.idle_add.side_effect = lambda callback, *args: callback(*args)
+
+
+class MemorySettings:
+    """Runtime fixture; persistent settings have separate contract tests."""
+
+    def __init__(self, bus, topic, instance, *, on_change):
+        self.instance = instance
+        self.custom_name = f"Solar Tasmota {topic}"
+        self.position = 0
+        self.phase = 1
+        self.on_change = on_change
+
+    def _set(self, field, value):
+        old = getattr(self, field)
+        setattr(self, field, value)
+        self.on_change(field, old, value)
+        return True
+
+    def set_custom_name(self, value):
+        return self._set("custom_name", value)
+
+    def set_position(self, value):
+        return self._set("position", value)
+
+    def set_phase(self, value):
+        return self._set("phase", value)
+
+
+@pytest.fixture(autouse=True)
+def runtime_dependencies(monkeypatch):
+    monkeypatch.setattr(_mod, "TasmotaSettings", MemorySettings)
+
+    def service(*_args, **_kwargs):
+        result = MagicMock()
+        result.__enter__.return_value = result
+        return result
+
+    monkeypatch.setattr(_mod, "VeDbusService", service)
+
 
 TasmotaPVInverter = _mod.TasmotaPVInverter
 MqttEnergyListener = _mod.MqttEnergyListener
@@ -63,13 +102,16 @@ stable_instance = _mod.stable_instance
 
 def _make_inverter(topic: str = "tasmota_120", instance: int = 120) -> TasmotaPVInverter:
     """Create a TasmotaPVInverter with all D-Bus interactions mocked."""
-    return TasmotaPVInverter(topic, instance)
+    inv = TasmotaPVInverter(topic, instance)
+    inv.apply(10.0, 230.0, 0.1, 1.0, 0.1, 0.0)
+    return inv
 
 
 def _sensor_msg(topic: str, energy: dict | None) -> MagicMock:
     """Build a mock paho message on tele/<topic>/SENSOR."""
     msg = MagicMock()
     msg.topic = f"tele/{topic}/SENSOR"
+    msg.retain = False
     if energy is None:
         msg.payload = b"not json at all"
     else:
@@ -136,7 +178,7 @@ class TestParseEnergyPayload:
         power, voltage, current, total, today, yesterday = parse_energy_payload(payload)
         assert power == pytest.approx(123.4)
         assert voltage == pytest.approx(230.1)
-        assert current == pytest.approx(0.54, rel=0.01)  # 123.4/230.1 ≈ 0.54
+        assert current == pytest.approx(0.556)
         assert total == pytest.approx(5678.9)
         assert today == pytest.approx(12.5)
         assert yesterday == pytest.approx(100.0)
@@ -161,14 +203,14 @@ class TestParseEnergyPayload:
         power, voltage, current, _total, _today, _yesterday = parse_energy_payload(payload)
         assert power == pytest.approx(100.0)
         assert voltage == pytest.approx(115.0)
-        assert current == pytest.approx(0.87, rel=0.01)  # 100/115 ≈ 0.87
+        assert current is None
 
     def test_zero_voltage_no_division_error(self) -> None:
         payload = json.dumps({"ENERGY": {"Power": 100, "Voltage": 0, "Total": 50, "Today": 1.0}})
         power, voltage, current, total, today, _yesterday = parse_energy_payload(payload)
         assert power == pytest.approx(100.0)
         assert voltage == pytest.approx(0.0)
-        assert current == pytest.approx(0.0)
+        assert current is None
         assert total == pytest.approx(50.0)
         assert today == pytest.approx(1.0)
 
@@ -297,8 +339,11 @@ class TestMqttDiscovery:
     def test_on_connect_subscribes_wildcard(self) -> None:
         listener = self._listener()
         client = MagicMock()
+        client.subscribe.return_value = (0, 1)
         listener._on_connect(client, None, {}, MagicMock(is_failure=False), None)
-        client.subscribe.assert_called_once_with(listener.DISCOVERY_FILTER, 0)
+        client.subscribe.assert_called_once_with(
+            [(listener.DISCOVERY_FILTER, 0), (listener.LWT_FILTER, 0)]
+        )
 
     def test_failed_connect_does_not_subscribe(self) -> None:
         listener = self._listener()
@@ -350,7 +395,7 @@ def test_stale_reading_invalidates_current_and_voltage():
         {"Power": 1, "Total": 10**400},
         {"Power": 1, "Today": 10**400},
         {"Power": 1, "Yesterday": 10**400},
-        {"Power": 1e308, "Voltage": 1e-308},
+        {"Power": 1, "Current": 10**400},
     ],
 )
 def test_nonrepresentable_energy_rejected(energy):
@@ -445,12 +490,10 @@ def test_power_that_expires_during_registration_is_never_published(monkeypatch):
         for (path, value), _ in inverter._dbusservice.__setitem__.call_args_list
         if path == "/Ac/Power"
     ]
-    assert power_writes == [None]
+    assert power_writes == []  # Registered paths already contain unknown values.
 
 
-@pytest.mark.parametrize(
-    "invalid_energy", [{"Power": 10**400}, {"Power": 1e308, "Voltage": 1e-308}]
-)
+@pytest.mark.parametrize("invalid_energy", [{"Power": 10**400}, {"Power": 1, "Current": "inf"}])
 def test_invalid_numeric_message_preserves_state_and_next_sample(monkeypatch, invalid_energy):
     now = [100.0]
     monkeypatch.setattr(_mod, "monotonic", lambda: now[0])
@@ -462,11 +505,13 @@ def test_invalid_numeric_message_preserves_state_and_next_sample(monkeypatch, in
     listener._on_message(None, None, _sensor_msg("plug", invalid_energy))
     assert inverter._last_update == 100.0
     inverter._dbusservice.__setitem__.assert_not_called()
-    listener._on_message(None, None, _sensor_msg("plug", {"Power": 20, "Voltage": 250}))
+    listener._on_message(
+        None, None, _sensor_msg("plug", {"Power": 20, "Voltage": 250, "Current": 0.16})
+    )
     assert listener.inverters() == [inverter]
     assert inverter._last_update == 150.0
     inverter._dbusservice.__setitem__.assert_any_call("/Ac/Power", 20.0)
-    inverter._dbusservice.__setitem__.assert_any_call("/Ac/L1/Current", 0.08)
+    inverter._dbusservice.__setitem__.assert_any_call("/Ac/L1/Current", 0.16)
 
 
 @pytest.mark.parametrize("energy", [None, [], "invalid", 42, True])
@@ -478,6 +523,7 @@ def test_non_object_energy_does_not_interrupt_following_telemetry(energy, monkey
     listener = MqttEnergyListener("localhost", 1883)
     listener._get_or_create = MagicMock()
     invalid = MagicMock(topic="tele/plug/SENSOR")
+    invalid.retain = False
     invalid.payload = json.dumps({"ENERGY": energy}).encode()
     listener._on_message(None, None, invalid)
     listener._get_or_create.assert_not_called()
@@ -485,94 +531,379 @@ def test_non_object_energy_does_not_interrupt_following_telemetry(energy, monkey
     listener._on_message(None, None, _sensor_msg("plug", {"Power": 125, "Voltage": 250}))
     listener._get_or_create.assert_called_once_with("plug")
     listener._get_or_create.return_value.apply.assert_called_once_with(
-        125.0, 250.0, 0.5, 0.0, 0.0, 0.0, received_at=100.0
+        125.0, 250.0, None, 0.0, 0.0, 0.0, received_at=100.0
     )
 
 
-def test_first_device_register_failure_recovers_on_next_sample(monkeypatch):
-    """One failed registration must not block the other device or replay telemetry.
+def test_registration_failure_requires_restart_but_existing_devices_still_update(
+    monkeypatch, runtime_service, tmp_path
+):
+    """Never recreate partial SettingsDevice trackers in the same process."""
+    listener = MqttEnergyListener("localhost", 1883)
+    listener._on_message(None, None, _sensor_msg("existing", {"Power": 10}))
+    existing = listener.inverters()[0]
+    settings_factory = MagicMock(wraps=MemorySettings)
+    monkeypatch.setattr(_mod, "TasmotaSettings", settings_factory)
 
-    Both samples are queued before the deferred GLib callback runs. Only the
-    first device's service register() raises, and only once. The second device
-    publishes. The next sample for the first device registers and publishes
-    that new reading, without a second copy of the other device or the old sample.
-    """
+    def failing_service(*args, **kwargs):
+        service = RuntimeService(*args, **kwargs)
+        service.register = MagicMock(side_effect=RuntimeError("registration failure"))
+        return service
 
-    class MemoryBus:
-        def __init__(self, private=False):
-            self.private = private
-
-    class MemoryService:
-        created: ClassVar[list["MemoryService"]] = []
-
-        def __init__(self, service_name, bus=None, register=False):
-            self.service_name = service_name
-            self.bus = bus
-            self.paths = {}
-            self.writes = []
-            self.registered = False
-            self.created.append(self)
-            self._fail_register = len(self.created) == 1
-
-        def add_path(self, path, value):
-            self.paths[path] = value
-
-        def register(self):
-            if self._fail_register:
-                self._fail_register = False
-                raise RuntimeError("synthetic register failure")
-            self.registered = True
-
-        def __setitem__(self, path, value):
-            self.paths[path] = value
-            self.writes.append((path, value))
-
-    monkeypatch.setattr(_mod, "MqttClient", MagicMock())
-    monkeypatch.setattr(_mod, "CallbackAPIVersion", MagicMock())
-    monkeypatch.setattr(_mod.dbus, "SystemBus", MemoryBus)
-    monkeypatch.setattr(_mod, "VeDbusService", MemoryService)
+    monkeypatch.setattr(_mod, "VeDbusService", failing_service)
     queued = []
     monkeypatch.setattr(_mod.GLib, "idle_add", queued.append)
+    listener._on_message(None, None, _sensor_msg("new", {"Power": 20}))
+    listener._on_message(None, None, _sensor_msg("existing", {"Power": 30}))
+    keep_scheduled = queued.pop()()
+    assert keep_scheduled is False
+    assert listener.inverters() == [existing]
+    assert existing._dbusservice["/Ac/Power"] == 30
+    assert not listener.healthy()
+    listener._on_message(None, None, _sensor_msg("new", {"Power": 40}))
+    queued.pop()()
+    assert settings_factory.call_count == 1
+    quit_loop = MagicMock()
+    heartbeat = tmp_path / "alive"
+    assert not _mod._make_tick(listener, str(heartbeat), quit_loop)()
+    quit_loop.assert_called_once()
+    assert not heartbeat.exists()
 
-    listener = MqttEnergyListener("127.0.0.1", 1883)
-    listener._on_message(None, None, _sensor_msg("plug_a", {"Power": 11, "Voltage": 230}))
-    listener._on_message(None, None, _sensor_msg("plug_b", {"Power": 22, "Voltage": 240}))
+    monkeypatch.setattr(_mod, "VeDbusService", RuntimeService)
+    restarted = MqttEnergyListener("localhost", 1883)
+    restarted._on_message(None, None, _sensor_msg("new", {"Power": 50}))
+    queued.pop()()
+    assert restarted.inverters()[0]._dbusservice["/Ac/Power"] == 50
+
+
+class RuntimeService:
+    """In-memory D-Bus service with explicit batches and injectable write faults."""
+
+    def __init__(self, *_args, **_kwargs):
+        self.values = {}
+        self.callbacks = {}
+        self.batches = []
+        self.current_batch = None
+        self.fail_path = None
+
+    def add_path(self, path, value, **kwargs):
+        self.values[path] = value
+        if "onchangecallback" in kwargs:
+            self.callbacks[path] = kwargs["onchangecallback"]
+
+    def register(self):
+        pass
+
+    def __getitem__(self, path):
+        return self.values[path]
+
+    def __contains__(self, path):
+        return path in self.values
+
+    def __enter__(self):
+        assert self.current_batch is None
+        self.current_batch = {}
+        return self
+
+    def __exit__(self, *_args):
+        self.batches.append(self.current_batch)
+        self.current_batch = None
+
+    def __setitem__(self, path, value):
+        assert self.current_batch is not None, "measurement writes must be batched"
+        if self.fail_path == path:
+            self.fail_path = None
+            raise RuntimeError("synthetic D-Bus failure")
+        self.current_batch[path] = value
+        self.values[path] = value
+
+
+@pytest.fixture
+def runtime_service(monkeypatch):
+    monkeypatch.setattr(_mod, "VeDbusService", RuntimeService)
+
+
+def _lwt_msg(topic, payload=b"Offline", retain=False):
+    msg = MagicMock(topic=f"tele/{topic}/LWT", payload=payload, retain=retain)
+    return msg
+
+
+def test_retained_power_never_discovers_or_revives(runtime_service):
+    listener = MqttEnergyListener("localhost", 1883)
+    cached = _sensor_msg("plug", {"Power": 777})
+    cached.retain = True
+    listener._on_message(None, None, cached)
     assert listener.inverters() == []
-    assert listener._pending_scheduled is True
+    listener._on_message(None, None, _sensor_msg("plug", {"Power": 10}))
+    inverter = listener.inverters()[0]
+    inverter.mark_offline()
+    listener._on_message(None, None, cached)
+    listener._on_message(None, None, _lwt_msg("plug", b"Online", retain=True))
+    assert inverter._dbusservice["/Connected"] == 0
+    assert inverter._dbusservice["/Ac/Power"] is None
+
+
+def test_lwt_offline_wins_over_queued_sensor_and_online_waits_for_measurement(
+    runtime_service, monkeypatch
+):
+    listener = MqttEnergyListener("localhost", 1883)
+    listener._on_message(None, None, _sensor_msg("plug", {"Power": 10}))
+    inverter = listener.inverters()[0]
+    queued = []
+    monkeypatch.setattr(_mod.GLib, "idle_add", queued.append)
+    listener._on_message(None, None, _sensor_msg("plug", {"Power": 20}))
+    listener._on_message(None, None, _lwt_msg("plug", retain=True))
+    listener._on_message(None, None, _lwt_msg("plug", b"Online"))
     assert len(queued) == 1
+    queued.pop()()
+    assert inverter._dbusservice["/Connected"] == 0
+    assert inverter._dbusservice["/Ac/Power"] is None
+    listener._on_message(None, None, _sensor_msg("plug", {"Power": 30}))
+    queued.pop()()
+    assert inverter._dbusservice["/Ac/Power"] == 30
 
-    first_result = queued.pop()()
-    assert first_result is False
-    assert listener._pending_scheduled is False
-    assert listener._pending == {}
-    assert [item.topic for item in listener.inverters()] == ["plug_b"]
-    published = listener.inverters()[0]
-    assert published._dbusservice.registered is True
-    assert published._dbusservice.paths["/Ac/Power"] == 22.0
-    assert published._dbusservice.paths["/Ac/L1/Voltage"] == 240.0
-    failed = MemoryService.created[0]
-    assert failed.registered is False
-    assert failed.writes == []
-    assert 11.0 not in failed.paths.values()
-    second_writes = list(published._dbusservice.writes)
 
-    listener._on_message(None, None, _sensor_msg("plug_a", {"Power": 33, "Voltage": 250}))
-    assert listener._pending_scheduled is True
-    assert len(queued) == 1
-    second_result = queued.pop()()
-    assert second_result is False
-    assert listener._pending_scheduled is False
-    assert listener._pending == {}
+def test_offline_for_unknown_device_does_not_create_service():
+    listener = MqttEnergyListener("localhost", 1883)
+    listener._on_message(None, None, _lwt_msg("plug", retain=True))
+    assert listener.inverters() == []
 
-    topics = [item.topic for item in listener.inverters()]
-    assert topics == ["plug_b", "plug_a"]
-    recovered = listener.inverters()[1]
-    assert recovered._dbusservice is MemoryService.created[2]
-    assert recovered._dbusservice.registered is True
-    assert recovered._dbusservice.paths["/Ac/Power"] == 33.0
-    assert recovered._dbusservice.paths["/Ac/L1/Voltage"] == 250.0
-    assert 11.0 not in recovered._dbusservice.paths.values()
-    assert all(value != 11.0 for _path, value in recovered._dbusservice.writes)
-    assert published._dbusservice.writes == second_writes
-    assert published._dbusservice.paths["/Ac/Power"] == 22.0
-    assert len(MemoryService.created) == 3
+
+@pytest.mark.parametrize("current", [-0.1, "nan", "inf", True, [], 10**400])
+def test_invalid_measured_current_rejects_reading(current):
+    assert parse_energy_payload(json.dumps({"ENERGY": {"Power": 9, "Current": current}})) is None
+
+
+def test_measured_rms_current_preserved_at_low_power_factor():
+    reading = parse_energy_payload(
+        json.dumps({"ENERGY": {"Power": 9, "Voltage": 123, "Current": 0.289, "Factor": 0.25}})
+    )
+    assert reading[2] == 0.289
+    assert parse_energy_payload('{"ENERGY":{"Power":9,"Current":null}}')[2] is None
+
+
+@pytest.mark.parametrize("payload", [b"[" * 20000 + b"0" + b"]" * 20000, b" " * 65537, b"\xff"])
+def test_malformed_payload_does_not_escape_real_paho_callback(payload, runtime_service):
+    from paho.mqtt.client import MQTTMessage
+
+    listener = MqttEnergyListener("localhost", 1883)
+    message = MQTTMessage(topic=b"tele/plug/SENSOR")
+    message.payload = payload
+    listener._client._handle_on_message(message)
+    assert listener.inverters() == []
+    message.payload = b'{"ENERGY":{"Power":10}}'
+    listener._client._handle_on_message(message)
+    assert listener.inverters()[0]._dbusservice["/Ac/Power"] == 10
+
+
+def test_failed_offline_write_is_retried_on_next_tick(runtime_service, tmp_path):
+    listener = MqttEnergyListener("localhost", 1883)
+    listener._on_message(None, None, _sensor_msg("plug", {"Power": 10}))
+    inverter = listener.inverters()[0]
+    inverter._dbusservice.fail_path = "/Connected"
+    listener._on_message(None, None, _lwt_msg("plug"))
+    assert inverter._connected
+    assert inverter._offline_requested
+    assert inverter._dbusservice["/Connected"] == 1
+    assert _mod._make_tick(listener, str(tmp_path / "alive"))()
+    assert not inverter._connected
+    assert inverter._dbusservice["/Connected"] == 0
+    assert inverter._dbusservice["/Ac/Power"] is None
+
+
+def test_one_failed_apply_preserves_other_device_and_invalidates_partial_update(
+    runtime_service, monkeypatch, tmp_path
+):
+    listener = MqttEnergyListener("localhost", 1883)
+    for topic in ("first", "second"):
+        listener._on_message(None, None, _sensor_msg(topic, {"Power": 10}))
+    first, second = listener.inverters()
+    first._dbusservice.fail_path = "/Ac/Power"
+    queued = []
+    monkeypatch.setattr(_mod.GLib, "idle_add", queued.append)
+    listener._on_message(None, None, _sensor_msg("first", {"Power": 20}))
+    listener._on_message(None, None, _sensor_msg("second", {"Power": 30}))
+    keep_scheduled = queued.pop()()
+    assert keep_scheduled is False
+    assert second._dbusservice["/Ac/Power"] == 30
+    assert first._offline_requested
+    _mod._make_tick(listener, str(tmp_path / "alive"))()
+    assert first._dbusservice["/Ac/Power"] is None
+
+
+def test_failed_idle_schedule_recovers_on_following_sample(runtime_service, monkeypatch):
+    listener = MqttEnergyListener("localhost", 1883)
+    monkeypatch.setattr(_mod.GLib, "idle_add", MagicMock(side_effect=RuntimeError("GLib fault")))
+    listener._on_message(None, None, _sensor_msg("plug", {"Power": 10}))
+    assert not listener._pending_scheduled
+    monkeypatch.setattr(_mod.GLib, "idle_add", lambda callback: callback())
+    listener._on_message(None, None, _sensor_msg("plug", {"Power": 20}))
+    assert listener.inverters()[0]._dbusservice["/Ac/Power"] == 20
+
+
+def test_worker_death_quits_without_writing_a_healthy_heartbeat(tmp_path):
+    listener = MqttEnergyListener("localhost", 1883)
+    listener._started = True
+    listener._client._thread = None
+    quit_loop = MagicMock()
+    heartbeat = tmp_path / "alive"
+    assert _mod._make_tick(listener, str(heartbeat), quit_loop)() is False
+    quit_loop.assert_called_once()
+    assert not heartbeat.exists()
+    assert "worker stopped" in listener.failure_reason
+
+
+def test_living_worker_is_healthy_during_broker_reconnect():
+    listener = MqttEnergyListener("localhost", 1883)
+    listener._started = True
+    listener._client._thread = MagicMock()
+    listener._client._thread.is_alive.return_value = True
+    assert not listener._client.is_connected()
+    assert listener.healthy()
+
+
+def test_invalid_diagnostics_name_field_and_are_rate_limited(monkeypatch, caplog):
+    clock = [100.0]
+    monkeypatch.setattr(_mod, "monotonic", lambda: clock[0])
+    listener = MqttEnergyListener("localhost", 1883)
+    listener._on_message(None, None, _sensor_msg("plug", {"Power": 10}))
+    invalid = _sensor_msg("plug", {"Power": 10, "Voltage": None})
+    for _ in range(10):
+        listener._on_message(None, None, invalid)
+    warnings = [record.message for record in caplog.records if "invalid SENSOR" in record.message]
+    assert len(warnings) == 1
+    assert "ENERGY.Voltage" in warnings[0]
+    clock[0] += 60
+    listener._on_message(None, None, invalid)
+    assert "9 invalid messages suppressed" in caplog.records[-1].message
+
+
+def test_phase_change_moves_fresh_sample_in_one_batch_and_preserves_total(runtime_service):
+    inverter = _make_inverter()
+    service = inverter._dbusservice
+    assert service["/Role"] == "pvinverter"
+    assert service["/AllowedRoles"] == ["pvinverter"]
+    assert "/NrOfPhases" not in service  # Classic GUI otherwise assumes L1.
+    assert "/Ac/Phase" not in service  # Classic and GUI-v2 use different numbering.
+    assert service.callbacks["/PhaseSetting"]("/PhaseSetting", 3)
+    assert service["/PhaseSetting"] == 3
+    assert service["/Ac/L1/Power"] is None
+    assert service["/Ac/L3/Power"] == service["/Ac/Power"] == 10
+    assert service["/Ac/L3/Current"] == 0.1
+    assert service.batches[-1]["/Ac/L1/Power"] is None
+    assert service.batches[-1]["/Ac/L3/Power"] == 10
+    assert service["/Ac/L3/Energy/Forward"] == service["/Ac/Energy/Forward"] == 1
+    assert service["/Ac/L1/Energy/Forward"] is None
+    inverter.mark_offline()
+    assert service["/Ac/L3/Energy/Forward"] == 1
+    service.callbacks["/PhaseSetting"]("/PhaseSetting", 2)
+    assert all(service[f"/Ac/L{phase}/Power"] is None for phase in (1, 2, 3))
+    assert service["/Connected"] == 0
+    assert service["/Ac/L2/Energy/Forward"] == 1
+    assert service["/Ac/L3/Energy/Forward"] is None
+
+
+def test_name_and_position_writes_use_settings_and_instance_change_requests_restart(
+    runtime_service,
+):
+    listener = MqttEnergyListener("localhost", 1883)
+    listener._on_message(None, None, _sensor_msg("plug", {"Power": 10}))
+    inverter = listener.inverters()[0]
+    service = inverter._dbusservice
+    service.callbacks["/CustomName"]("/CustomName", "Roof solar")
+    service.callbacks["/Position"]("/Position", 1)
+    assert inverter.settings.custom_name == service["/CustomName"] == "Roof solar"
+    assert inverter.settings.position == service["/Position"] == 1
+    inverter.settings._set("instance", 900)
+    assert not listener.healthy()
+    assert "instance changed" in listener.failure_reason
+
+
+def test_real_network_worker_survives_nested_json_and_delivers_next_sample(
+    runtime_service, monkeypatch
+):
+    """Exercise paho's actual socket loop against a local minimal MQTT broker."""
+    import socket
+    import threading
+
+    def read_exact(connection, count):
+        data = b""
+        while len(data) < count:
+            chunk = connection.recv(count - len(data))
+            if not chunk:
+                raise EOFError("MQTT connection closed")
+            data += chunk
+        return data
+
+    def read_packet(connection):
+        header = read_exact(connection, 1)
+        remaining = 0
+        for shift in range(0, 28, 7):
+            byte = read_exact(connection, 1)[0]
+            remaining += (byte & 127) << shift
+            if byte < 128:
+                return header, read_exact(connection, remaining)
+        raise ValueError("Malformed MQTT packet length")
+
+    def publish(payload):
+        topic = b"tele/network-test/SENSOR"
+        body = len(topic).to_bytes(2, "big") + topic + payload
+        remaining = len(body)
+        encoded = b""
+        while True:
+            byte = remaining % 128
+            remaining //= 128
+            encoded += bytes([byte | (128 if remaining else 0)])
+            if not remaining:
+                return b"\x30" + encoded + body
+
+    queued = []
+    sample_received = threading.Event()
+    broker_errors = []
+
+    def idle_add(callback):
+        queued.append(callback)
+        sample_received.set()
+
+    monkeypatch.setattr(_mod.GLib, "idle_add", idle_add)
+    with socket.socket() as server:
+        server.bind(("127.0.0.1", 0))
+        server.listen(1)
+        server.settimeout(5)
+
+        def broker():
+            try:
+                connection, _address = server.accept()
+                with connection:
+                    connection.settimeout(5)
+                    assert read_packet(connection)[0] == b"\x10"  # CONNECT
+                    connection.sendall(b"\x20\x02\x00\x00")  # CONNACK
+                    header, subscribe = read_packet(connection)
+                    assert header == b"\x82"
+                    # Both SENSOR and LWT filters are in a single SUBSCRIBE.
+                    connection.sendall(b"\x90\x04" + subscribe[:2] + b"\x00\x00")
+                    connection.sendall(publish(b"[" * 20000 + b"0" + b"]" * 20000))
+                    connection.sendall(publish(b'{"ENERGY":{"Power":42,"Current":0.29}}'))
+                    assert read_packet(connection)[0] == b"\xe0"  # graceful DISCONNECT
+            except (AssertionError, OSError, EOFError, ValueError) as error:
+                broker_errors.append(error)
+                sample_received.set()
+
+        broker_thread = threading.Thread(target=broker, daemon=True)
+        broker_thread.start()
+        listener = MqttEnergyListener("127.0.0.1", server.getsockname()[1])
+        try:
+            listener.start()
+            assert sample_received.wait(5), "live telemetry did not reach the GLib queue"
+            assert broker_errors == []
+            assert listener.healthy()
+            assert listener._client._thread.is_alive()
+            assert listener.inverters() == []
+            keep_scheduled = queued.pop()()
+            assert keep_scheduled is False
+            assert listener.inverters()[0]._dbusservice["/Ac/Power"] == 42
+        finally:
+            listener.stop()
+            broker_thread.join(timeout=5)
+        assert not broker_thread.is_alive()
+        assert broker_errors == []

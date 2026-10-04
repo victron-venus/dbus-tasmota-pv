@@ -16,6 +16,8 @@ def test_installer_preserves_supervisor_inodes_and_boot_order(tmp_path, legacy):
     source = tmp_path / "source"
     source.mkdir()
     shutil.copy(repo / "dbus-tasmota-pv.py", source)
+    shutil.copy(repo / "tasmota_settings.py", source)
+    (source / "version").write_text("v3.1.0-beta.1\n")
     installer = source / "install.sh"
     installer.write_text(
         re.sub(
@@ -61,6 +63,7 @@ def test_installer_preserves_supervisor_inodes_and_boot_order(tmp_path, legacy):
         (stubs / name).write_text("")
     (stubs / "gi/repository.py").write_text("GLib = object()\n")
     (stubs / "vedbus.py").write_text("class VeDbusService: pass\n")
+    (stubs / "settingsdevice.py").write_text("class SettingsDevice: pass\n")
     (stubs / "paho/mqtt/client.py").write_text("CallbackAPIVersion = object()\n")
     environment = dict(
         os.environ, PATH=str(bin_dir) + os.pathsep + os.environ["PATH"], PYTHONPATH=str(stubs)
@@ -70,6 +73,10 @@ def test_installer_preserves_supervisor_inodes_and_boot_order(tmp_path, legacy):
             ["sh", str(installer)], env=environment, capture_output=True, text=True, check=False
         )
         assert result.returncode == 0, result.stderr
+        assert (install_dir / "tasmota_settings.py").read_bytes() == (
+            source / "tasmota_settings.py"
+        ).read_bytes()
+        assert (install_dir / "version").read_text() == "v3.1.0-beta.1\n"
         assert service.is_symlink()
         preserved = (
             persistent,

@@ -67,13 +67,14 @@ flowchart TB
 - Reports power, voltage, current, and total energy
 - Each plug appears as a separate PV inverter in Victron GUI
 - Shows in VRM portal as PV production
-- Auto-reconnect and staleness detection (offline after 90s without data)
+- Auto-reconnect, MQTT worker supervision, and offline detection using LWT and a 90-second telemetry timeout
+- Persistent device instances, custom names, AC position, and phase selection
 - Uses paho-mqtt preinstalled on Venus OS 3.x (no pip needed)
 
 ## Device Discovery
 
 No configuration needed. The service subscribes to the wildcard MQTT topic
-`tele/+/SENSOR`, and every Tasmota plug whose telemetry it sees is
+`tele/+/SENSOR` and `tele/+/LWT`, and every Tasmota plug whose live energy telemetry it sees is
 automatically registered as a PV inverter on the D-Bus. Add a new plug
 (make sure its Tasmota `Topic` is unique and it publishes to the broker) and
 it appears on its own within one telemetry interval.
@@ -81,8 +82,10 @@ it appears on its own within one telemetry interval.
 Malformed telemetry, including a non-object `ENERGY` value, is ignored so
 subsequent valid readings continue to update the inverters.
 
-Each discovered plug gets a deterministic D-Bus instance derived from its
-MQTT topic, so service names survive restarts. The `/Serial` path equals
+Each discovered plug reserves a persistent D-Bus instance in Venus OS
+`localsettings`. Its legacy topic-derived number is preferred on first upgrade
+when available; conflicting numbers are allocated by Venus OS and retained
+across restarts, regardless of discovery order. The `/Serial` path equals
 the Tasmota topic (`TASMOTA-<topic>`), which keeps device identity stable
 in the GUI and VRM.
 
@@ -120,7 +123,7 @@ The easiest way to install is via [SetupHelper](https://github.com/kwindrem/Setu
    - Settings → PackageManager → Inactive packages → **new**
    - Package name: `dbus-tasmota-pv`
    - GitHub user: `victron-venus`
-   - Branch/tag: `v3.0.1`
+   - Branch/tag: the exact release tag you intend to install
    - Proceed → Download → Install
 
 3. **Done!** The package will automatically reinstall after Venus OS updates.
@@ -134,7 +137,7 @@ PackageManager discovers packages by scanning `/data/` for directories containin
 
 The `gitHubInfo` file tells PackageManager where to download from:
 ```
-victron-venus:v3.0.1
+victron-venus:v3.1.0
 ```
 
 ### Uninstall
@@ -245,10 +248,44 @@ inverter. One broker, one telemetry stream: consumed by the driver
 curl 'http://PLUG_IP/cm?cmnd=Backlog%20MqttHost%20GX_IP%3B%20MqttPort%201883%3B%20Topic%20tasmota_120%3B%20SetOption19%200%3B%20TelePeriod%2060%3B%20SensorRetain%201'
 ```
 
-- `Topic tasmota_120`: unique topic per plug; must match the driver config
+- `Topic tasmota_120`: unique topic per plug; no driver device list is required
 - `SetOption19 0`: disable Home Assistant discovery publishing
 - `TelePeriod 60`: push telemetry every 60 seconds
-- `SensorRetain 1`: broker keeps last reading (driver gets data immediately after restart)
+- `SensorRetain 1`: broker keeps the last reading for subscribers. The driver waits
+  for a new, non-retained SENSOR before publishing live measurements after restart;
+  an old retained reading cannot bring an offline inverter back online.
+
+Keep `TelePeriod` below the driver's 90-second timeout; 60 seconds is recommended.
+Tasmota's default 300-second period requires configuration even when power-change
+messages normally arrive more frequently. `LWT Offline` invalidates the current
+measurement promptly; `LWT Online` alone does not count as a fresh measurement.
+
+## Persistent device settings
+
+The service exposes writable `/CustomName`, `/Position`, and `/PhaseSetting`
+paths. Values are saved through Venus OS `localsettings`, so they survive service
+and device restarts. Defaults preserve previous behavior: AC input 1, phase L1,
+and the existing topic-based display name.
+
+- `/Position`: `0` = AC input 1, `1` = AC output, `2` = AC input 2.
+- `/PhaseSetting`: `1`, `2`, or `3`; readings move to the selected `/Ac/Ln` paths.
+  Paths for unused phases are invalid, preventing duplicate production totals.
+- `/CustomName`: a UTF-8 display name.
+
+GUI support depends on firmware: the classic GUI can expose the position setup,
+while phase selection is available through D-Bus/localsettings and supported
+newer GUI versions. The driver keeps its role fixed to `pvinverter`.
+
+The backing paths are `/Settings/Devices/tasmota_<hex-topic>/...`, where
+`<hex-topic>` is the hexadecimal UTF-8 encoding of the complete MQTT topic.
+`ClassAndVrmInstance` uses the native `pvinverter:<instance>` format. An instance
+change restarts the driver so D-Bus consumers rediscover the correct identity.
+Renaming the MQTT topic creates a new identity; changing `/CustomName` does not.
+
+If persistent registration fails, the driver exits for a supervised retry instead
+of publishing an unstable temporary instance. An upgrade preserves existing
+preferred instances when those numbers have not already been reserved by another
+PV driver. Inspect any pre-existing conflicts before deployment.
 
 ## Home Assistant Integration
 
@@ -352,7 +389,7 @@ PackageManager's `AddStoredPackages()` requires both a `version` file AND a `set
 **Check**:
 ```bash
 ls -la /data/dbus-tasmota-pv/version /data/dbus-tasmota-pv/setup
-cat /data/dbus-tasmota-pv/gitHubInfo   # should show: victron-venus:v3.0.1
+cat /data/dbus-tasmota-pv/gitHubInfo   # should identify the installed release tag
 ```
 
 **Common issues**:
@@ -467,14 +504,22 @@ For issues specific to:
 Device registration and all D-Bus writes run on the GLib thread. MQTT bursts
 are coalesced to the latest reading per topic before application, preserving
 the MQTT receipt time. Queue delays cannot extend a sample's freshness.
-Malformed, overflowing, non-finite, and ENERGY payloads without Power cannot
-create or refresh a meter; derived current must also be finite.
+Malformed, excessively nested, overflowing, non-finite, and ENERGY payloads without
+Power cannot create or refresh a meter. AC current is the validated measured
+`ENERGY.Current`, not `Power / Voltage`; an absent current is invalid rather than
+an assumed unity-power-factor value. Parse failures have rate-limited diagnostics
+without logging full telemetry bodies.
 After the 90-second telemetry timeout, instantaneous power, voltage, and current
 become invalid and `/Connected` becomes zero; cumulative energy stays available.
-Fresh telemetry restores the meter. The timeout uses a monotonic clock.
+Fresh non-retained telemetry restores the meter. The timeout uses a monotonic clock.
+Updates are sent as one D-Bus `ItemsChanged` batch, with failures isolated per
+device. A failed invalidation is retried. The housekeeping loop supervises the
+MQTT worker so a dead network thread cannot leave a healthy-looking process and
+heartbeat indefinitely; the native supervisor restarts a failed runtime.
 
 Run `./install.sh` from the checkout or `/data/dbus-tasmota-pv`. It verifies
-firmware-provided libraries and atomically replaces launcher files while keeping
+firmware-provided libraries, stages and compiles both Python modules, stops the old
+runtime, and replaces the payload and launcher files while keeping
 the service, log and supervisor directory inodes. Legacy real service directories
 are moved intact to persistent storage. The SetupHelper entrypoint uses the same
 installer and records completion with PackageManager. Both stdout and stderr
@@ -482,3 +527,11 @@ reach native `multilog`; logs are bounded to four rotated 25 KB files plus the
 current file under `/var/log/dbus-tasmota-pv`. The `/data/rc.local` boot hook is
 inserted before an existing `exit 0`. No root filesystem remount or pip install
 is needed on a supported Venus OS image with paho-mqtt 2.x.
+
+For a beta upgrade, download the complete release archive and verify its
+`SHA256SUMS` and release manifest. Extract it into a temporary directory on `/data`
+and run that directory's `install.sh`; do not copy only the main Python file.
+Keep a backup of the previous runtime and launcher files. To roll back, stop the
+service, restore those files, and start it again without replacing the live
+`supervise` directories or restoring the global localsettings XML. The additional
+Tasmota settings can remain stored during rollback.

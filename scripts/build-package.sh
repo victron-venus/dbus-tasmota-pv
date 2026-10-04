@@ -12,7 +12,8 @@ staging="$(mktemp -d)"
 trap 'rm -rf "$staging"' EXIT
 package="$staging/dbus-tasmota-pv"
 mkdir -p "$package"
-cp "$root/dbus-tasmota-pv.py" "$root/setup" "$root/gitHubInfo" "$root/version" "$root/install.sh" "$root/README.md" "$root/LICENSE" "$package/"
+cp "$root/dbus-tasmota-pv.py" "$root/tasmota_settings.py" "$root/setup" "$root/gitHubInfo" "$root/version" "$root/install.sh" "$root/README.md" "$root/LICENSE" "$package/"
+cp "$root/pyproject.toml" "$root/uv.lock" "$root/.python-version" "$package/"
 cp -R "$root/services" "$package/"
 archive="dbus-tasmota-pv-${tag}.tar.gz"
 tar -czf "$output/$archive" -C "$staging" dbus-tasmota-pv

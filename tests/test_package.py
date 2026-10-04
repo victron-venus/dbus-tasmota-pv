@@ -2,7 +2,9 @@
 
 import ast
 import hashlib
+import json
 import os
+import runpy
 import subprocess
 import sys
 import tarfile
@@ -21,7 +23,15 @@ def test_release_archive_contains_working_service_contract(tmp_path: Path) -> No
     with tarfile.open(archive) as package:
         package.extractall(tmp_path / "unpacked", filter="data")
     installed = tmp_path / "unpacked/dbus-tasmota-pv"
-    for name in ("setup", "version", "gitHubInfo", "install.sh", "README.md", "LICENSE"):
+    for name in (
+        "setup",
+        "version",
+        "gitHubInfo",
+        "install.sh",
+        "README.md",
+        "LICENSE",
+        "tasmota_settings.py",
+    ):
         assert (installed / name).is_file()
     assert (installed / "version").read_text().strip() == tag
     module = ast.parse((installed / "dbus-tasmota-pv.py").read_text())
@@ -46,3 +56,28 @@ def test_release_archive_contains_working_service_contract(tmp_path: Path) -> No
     )
     assert "--mqtt-host" in result.stdout
     assert "--config" not in result.stdout
+
+
+def test_hosted_release_archive_includes_settings_module(tmp_path: Path) -> None:
+    """Exercise the declared-input packager used by the hosted beta workflow."""
+    root = Path(__file__).resolve().parents[1]
+    packager = runpy.run_path(str(root / "scripts/package_release.py"))
+    config = json.loads((root / ".release-package.json").read_text())
+    _, selected = packager["package_inputs"](root, config)
+    assert "tasmota_settings.py" in selected
+    archive = tmp_path / "hosted.tar.gz"
+    packager["write_archive"](root, config["name"], selected, archive)
+    with tarfile.open(archive) as package:
+        package.extractall(tmp_path / "hosted", filter="data")
+    installed = tmp_path / "hosted/dbus-tasmota-pv"
+    assert (installed / "tasmota_settings.py").read_bytes() == (
+        root / "tasmota_settings.py"
+    ).read_bytes()
+    result = subprocess.run(
+        [sys.executable, str(installed / "dbus-tasmota-pv.py"), "--help"],
+        cwd=tmp_path,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    assert "--mqtt-host" in result.stdout
