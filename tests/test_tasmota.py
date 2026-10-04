@@ -555,7 +555,8 @@ def test_registration_failure_requires_restart_but_existing_devices_still_update
     monkeypatch.setattr(_mod.GLib, "idle_add", queued.append)
     listener._on_message(None, None, _sensor_msg("new", {"Power": 20}))
     listener._on_message(None, None, _sensor_msg("existing", {"Power": 30}))
-    assert queued.pop()() is False
+    keep_scheduled = queued.pop()()
+    assert keep_scheduled is False
     assert listener.inverters() == [existing]
     assert existing._dbusservice["/Ac/Power"] == 30
     assert not listener.healthy()
@@ -575,23 +576,29 @@ def test_registration_failure_requires_restart_but_existing_devices_still_update
     assert restarted.inverters()[0]._dbusservice["/Ac/Power"] == 50
 
 
-class RuntimeService(dict):
+class RuntimeService:
     """In-memory D-Bus service with explicit batches and injectable write faults."""
 
     def __init__(self, *_args, **_kwargs):
-        super().__init__()
+        self.values = {}
         self.callbacks = {}
         self.batches = []
         self.current_batch = None
         self.fail_path = None
 
     def add_path(self, path, value, **kwargs):
-        dict.__setitem__(self, path, value)
+        self.values[path] = value
         if "onchangecallback" in kwargs:
             self.callbacks[path] = kwargs["onchangecallback"]
 
     def register(self):
         pass
+
+    def __getitem__(self, path):
+        return self.values[path]
+
+    def __contains__(self, path):
+        return path in self.values
 
     def __enter__(self):
         assert self.current_batch is None
@@ -608,7 +615,7 @@ class RuntimeService(dict):
             self.fail_path = None
             raise RuntimeError("synthetic D-Bus failure")
         self.current_batch[path] = value
-        super().__setitem__(path, value)
+        self.values[path] = value
 
 
 @pytest.fixture
@@ -716,7 +723,8 @@ def test_one_failed_apply_preserves_other_device_and_invalidates_partial_update(
     monkeypatch.setattr(_mod.GLib, "idle_add", queued.append)
     listener._on_message(None, None, _sensor_msg("first", {"Power": 20}))
     listener._on_message(None, None, _sensor_msg("second", {"Power": 30}))
-    assert queued.pop()() is False
+    keep_scheduled = queued.pop()()
+    assert keep_scheduled is False
     assert second._dbusservice["/Ac/Power"] == 30
     assert first._offline_requested
     _mod._make_tick(listener, str(tmp_path / "alive"))()
@@ -891,7 +899,8 @@ def test_real_network_worker_survives_nested_json_and_delivers_next_sample(
             assert listener.healthy()
             assert listener._client._thread.is_alive()
             assert listener.inverters() == []
-            assert queued.pop()() is False
+            keep_scheduled = queued.pop()()
+            assert keep_scheduled is False
             assert listener.inverters()[0]._dbusservice["/Ac/Power"] == 42
         finally:
             listener.stop()
