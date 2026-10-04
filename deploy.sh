@@ -29,22 +29,25 @@ if ! ssh -o ConnectTimeout=5 -o BatchMode=yes "$SSH_HOST" "echo ok" >/dev/null 2
     exit 1
 fi
 
-# Create directory on remote
-echo ">>> Creating directory..."
-ssh "$SSH_HOST" "mkdir -p $REMOTE_DIR"
-
-# Copy files. Devices are auto-discovered via MQTT; no config file deployed.
-echo ">>> Copying files..."
-scp "$SCRIPT_DIR/dbus-tasmota-pv.py" "$SSH_HOST:$REMOTE_DIR/"
-scp "$SCRIPT_DIR/install.sh" "$SSH_HOST:$REMOTE_DIR/"
-
-# Make executable
-ssh "$SSH_HOST" "chmod +x $REMOTE_DIR/*.py $REMOTE_DIR/install.sh"
+# Stage the complete payload so a missing companion or interrupted transfer
+# cannot overwrite the running driver. The installer validates it before stop.
+REMOTE_STAGE=$(ssh "$SSH_HOST" 'mktemp -d /data/dbus-tasmota-pv-deploy.XXXXXX')
+case "$REMOTE_STAGE" in
+    /data/dbus-tasmota-pv-deploy.*) ;;
+    *) echo 'Unexpected staging path' >&2; exit 1 ;;
+esac
+trap 'ssh "$SSH_HOST" "rm -rf -- $REMOTE_STAGE"' EXIT
+echo ">>> Staging complete runtime..."
+scp "$SCRIPT_DIR/dbus-tasmota-pv.py" "$SCRIPT_DIR/tasmota_settings.py" \
+    "$SCRIPT_DIR/install.sh" "$SCRIPT_DIR/version" "$SCRIPT_DIR/gitHubInfo" \
+    "$SCRIPT_DIR/setup" "$SCRIPT_DIR/README.md" "$SCRIPT_DIR/LICENSE" \
+    "$SCRIPT_DIR/pyproject.toml" "$SCRIPT_DIR/uv.lock" "$SCRIPT_DIR/.python-version" \
+    "$SSH_HOST:$REMOTE_STAGE/"
 
 # Run install script
 echo ""
 echo ">>> Running install script on Venus OS..."
-if ! ssh "$SSH_HOST" "cd $REMOTE_DIR && ./install.sh"; then
+if ! ssh "$SSH_HOST" "sh $REMOTE_STAGE/install.sh"; then
     echo "Error: install script failed" >&2
     exit 1
 fi

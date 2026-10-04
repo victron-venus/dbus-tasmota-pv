@@ -2,6 +2,7 @@
   "name": "dbus-tasmota-pv",
   "include": [
     "dbus-tasmota-pv.py",
+    "tasmota_settings.py",
     "setup",
     "gitHubInfo",
     "version",
