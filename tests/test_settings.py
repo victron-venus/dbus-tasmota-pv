@@ -171,7 +171,16 @@ def test_external_changes_include_reallocated_instance():
 
 
 @pytest.mark.parametrize(
-    "invalid", ["grid:1", "pvinverter:-1", "pvinverter:abc", "pvinverter:32768", None]
+    "invalid",
+    [
+        "grid:1",
+        "pvinverter:-1",
+        "pvinverter:abc",
+        "pvinverter:32768",
+        "pvinverter:١",
+        "pvinverter:１２",
+        None,
+    ],
 )
 def test_invalid_external_identity_is_not_published(invalid):
     service = LocalSettings()

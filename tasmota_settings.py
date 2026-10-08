@@ -28,7 +28,9 @@ def _integer(value: Any, minimum: int, maximum: int) -> int:
 
 
 def _instance(value: Any) -> int:
-    match = re.fullmatch(r"pvinverter:([0-9]+)", value) if isinstance(value, str) else None
+    match = (
+        re.fullmatch(r"pvinverter:(\d+)", value, flags=re.ASCII) if isinstance(value, str) else None
+    )
     if match is None:
         raise ValueError("ClassAndVrmInstance must contain pvinverter:<instance>")
     return _integer(int(match.group(1)), 0, MAX_DEVICE_INSTANCE)
@@ -133,7 +135,7 @@ class TasmotaSettings:
             return
         try:
             value = self._validate(field, value)
-        except (ValueError, UnicodeError):
+        except ValueError:
             logger.warning("Ignoring invalid localsettings %s value %r", field, value)
             return
         self._accept(field, value)
@@ -141,7 +143,7 @@ class TasmotaSettings:
     def _set(self, field: str, value: Any) -> bool:
         try:
             value = self._validate(field, value)
-        except (ValueError, UnicodeError):
+        except ValueError:
             return False
         try:
             self._settings[field] = value

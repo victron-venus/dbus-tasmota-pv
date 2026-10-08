@@ -101,6 +101,40 @@ def parse_energy_payload(
     return _parse_energy_payload(payload)[0]
 
 
+def _energy_reading(energy: dict[str, Any]) -> tuple[EnergyReading | None, str | None]:
+    """Validate measurements in stable field order and preserve the first invalid field."""
+    values = {}
+    for field, default in (
+        ("Power", None),
+        ("Voltage", 115.0),
+        ("Total", 0.0),
+        ("Today", 0.0),
+        ("Yesterday", 0.0),
+        ("Current", None),
+    ):
+        value = energy.get(field, default)
+        if field == "Current" and value is None:
+            values[field] = None
+            continue
+        try:
+            if isinstance(value, bool):
+                raise TypeError("boolean measurement")
+            value = float(value)
+            if not math.isfinite(value) or (field in ("Voltage", "Current") and value < 0):
+                raise ValueError("non-finite or negative measurement")
+        except (TypeError, ValueError, OverflowError):
+            return None, f"invalid ENERGY.{field}"
+        values[field] = value
+    return (
+        values["Power"],
+        values["Voltage"],
+        values["Current"],
+        values["Total"],
+        values["Today"],
+        values["Yesterday"],
+    ), None
+
+
 def _parse_energy_payload(payload: bytes | str) -> tuple[EnergyReading | None, str | None]:
     """Return a reading and a bounded diagnostic without logging raw payloads."""
     if not isinstance(payload, (bytes, str)) or len(payload) > MAX_SENSOR_PAYLOAD_BYTES:
@@ -112,36 +146,7 @@ def _parse_energy_payload(payload: bytes | str) -> tuple[EnergyReading | None, s
         energy = document.get("ENERGY")
         if not isinstance(energy, dict) or "Power" not in energy:
             return None, "missing ENERGY object or Power"
-        values = {}
-        for field, default in (
-            ("Power", None),
-            ("Voltage", 115.0),
-            ("Total", 0.0),
-            ("Today", 0.0),
-            ("Yesterday", 0.0),
-            ("Current", None),
-        ):
-            value = energy.get(field, default)
-            if field == "Current" and value is None:
-                values[field] = None
-                continue
-            try:
-                if isinstance(value, bool):
-                    raise TypeError("boolean measurement")
-                value = float(value)
-                if not math.isfinite(value) or (field in ("Voltage", "Current") and value < 0):
-                    raise ValueError("non-finite or negative measurement")
-            except (TypeError, ValueError, OverflowError):
-                return None, f"invalid ENERGY.{field}"
-            values[field] = value
-        return (
-            values["Power"],
-            values["Voltage"],
-            values["Current"],
-            values["Total"],
-            values["Today"],
-            values["Yesterday"],
-        ), None
+        return _energy_reading(energy)
     except (TypeError, ValueError, OverflowError, RecursionError):
         return None, "invalid JSON or excessive nesting"
 
