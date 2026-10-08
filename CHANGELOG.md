@@ -8,6 +8,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [3.1.0] - Development line
 
 ### Fixed
+- Separate telemetry measurement validation from JSON decoding while preserving diagnostics, defaults and ASCII-only persistent identities.
 - Require live MQTT telemetry instead of reviving offline power from retained messages; invalidate on LWT Offline.
 - Publish measured AC current instead of assuming unity power factor with Power/Voltage.
 - Contain malformed and deeply nested JSON and detect a stopped MQTT network worker.
