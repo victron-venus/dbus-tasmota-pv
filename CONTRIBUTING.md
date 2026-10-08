@@ -1,70 +1,31 @@
 # Contributing to dbus-tasmota-pv
 
-Thank you for your interest in contributing!
+Publishes Tasmota MQTT power measurements as a Victron D-Bus PV inverter.
 
-## How to Contribute
+## Reports and discussion
 
-### Reporting Bugs
+Use [GitHub Issues](https://github.com/victron-venus/dbus-tasmota-pv/issues) for bugs, enhancements and design discussion. Search existing reports first. English reports and pull requests are welcome. Include the version or commit, platform, sanitized configuration, reproduction steps, expected behavior and actual behavior. Do not include credentials, personal data or private capture files. Use [SECURITY.md](SECURITY.md) for confidential vulnerability reports.
 
-1. Check existing [issues](https://github.com/victron-venus/dbus-tasmota-pv/issues) to avoid duplicates
-2. Use the bug report template
-3. Include:
-   - Venus OS version
-   - Tasmota firmware version
-   - Smart plug model
-   - Network configuration
-   - Relevant logs
+## Proposing a change
 
-### Suggesting Features
+1. Fork or clone the repository over HTTPS and create a topic branch from the default branch.
+2. Keep the change focused and explain the problem and observable behavior in a pull request.
+3. Follow the existing language style and checked-in formatter/linter configuration. Resolve new warnings; explain any narrowly scoped exception with evidence.
+4. Add automated tests for major new functionality and regression tests for corrected bugs. Cover rejected input, unavailable dependencies and relevant failure paths as well as successful input.
+5. Update user-facing configuration/interface documentation and release notes for changed behavior. Record upgrade impact and any public vulnerability identifier when applicable.
+6. Report the exact checks run, their results and any checks that were not run. Wait for required CI and reviewer approval before merging.
 
-1. Open a feature request issue
-2. Describe the use case
-3. Explain why it would benefit others
+Contributions must be compatible with [LICENSE](LICENSE). Preserve third-party copyright and license notices; do not copy code without compatible redistribution rights.
 
-### Pull Requests
+## Local validation
 
-1. Fork the repository
-2. Create a feature branch: `git checkout -b feature/my-feature`
-3. Make your changes
-4. Test on actual Venus OS hardware if possible
-5. Run linter: `ruff check .`
-6. Commit with clear messages
-7. Push and create a Pull Request
+Install local test dependencies with `bash scripts/ci.sh --install`, then run `bash scripts/ci.sh`. The script is the authoritative local entry point for the checks and tool versions; inspect it and the checked-in dependency manifests before installing prerequisites. Use an isolated development environment.
 
-### Code Style
+Automated tests use mocks or controlled fixtures where available. A passing unit test does not establish hardware safety. Describe any physical-device test separately, including firmware, configuration and expected rollback. Never run installation, deployment, Terraform apply or actuator commands merely to validate a documentation change.
 
-- Follow PEP 8
-- Use meaningful variable names
-- Add comments for complex logic
-- Keep functions focused and small
+## Source and interfaces
 
-### Testing
+- [dbus-tasmota-pv.py](dbus-tasmota-pv.py)
+- [tasmota_settings.py](tasmota_settings.py)
 
-- Test with actual Tasmota devices
-- Verify fresh MQTT SENSOR data, retained-message rejection, and LWT offline handling
-- Check D-Bus service registration
-- Verify PV data appears in VRM Portal / GUI
-
-## Development Setup
-
-```bash
-# Clone
-git clone https://github.com/victron-venus/dbus-tasmota-pv.git
-cd dbus-tasmota-pv
-
-# Install the local test tools (hardware and D-Bus are mocked in unit tests)
-bash scripts/ci.sh --install
-bash scripts/ci.sh
-
-# Run on Venus OS using its native Python/D-Bus libraries
-python3 dbus-tasmota-pv.py --mqtt-host 127.0.0.1
-```
-
-## Questions?
-
-- Open a [Discussion](https://github.com/victron-venus/dbus-tasmota-pv/discussions)
-- Ask on [Victron Community](https://community.victronenergy.com/)
-
-## License
-
-By contributing, you agree that your contributions will be licensed under the MIT License.
+See [README.md](README.md) for acquisition, configuration and usage, and [the evidence index](docs/openssf-evidence.md) for the public development-process references.
