@@ -535,3 +535,9 @@ Keep a backup of the previous runtime and launcher files. To roll back, stop the
 service, restore those files, and start it again without replacing the live
 `supervise` directories or restoring the global localsettings XML. The additional
 Tasmota settings can remain stored during rollback.
+
+## Contributing and security
+
+See [CONTRIBUTING.md](CONTRIBUTING.md) for reports, development checks and pull requests,
+[SECURITY.md](SECURITY.md) for private vulnerability reporting and deployment trust boundaries,
+and the [OpenSSF evidence index](docs/openssf-evidence.md) for assessment references and remaining verification.

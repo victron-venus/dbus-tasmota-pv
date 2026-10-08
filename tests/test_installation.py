@@ -3,7 +3,9 @@
 import os
 import re
 import shutil
-import subprocess
+
+# Reviewed test harness: fixed commands and isolated fixture paths; no shell interpolation.
+import subprocess  # nosec B404
 import sys
 from pathlib import Path
 
@@ -69,7 +71,8 @@ def test_installer_preserves_supervisor_inodes_and_boot_order(tmp_path, legacy):
         os.environ, PATH=str(bin_dir) + os.pathsep + os.environ["PATH"], PYTHONPATH=str(stubs)
     )
     for _ in range(2):
-        result = subprocess.run(
+        # Reviewed test harness: fixed commands and isolated fixture paths; no shell interpolation.
+        result = subprocess.run(  # nosec B603, B607
             ["sh", str(installer)], env=environment, capture_output=True, text=True, check=False
         )
         assert result.returncode == 0, result.stderr
@@ -118,7 +121,8 @@ def test_setuphelper_uses_native_installer_and_records_only_success(tmp_path, in
     (tmp_path / "install.sh").write_text(
         '#!/bin/sh\ntouch "$TEST_ROOT/installer-called"\n' + f"exit {installer_status}\n"
     )
-    result = subprocess.run(
+    # Reviewed test harness: fixed commands and isolated fixture paths; no shell interpolation.
+    result = subprocess.run(  # nosec B603, B607
         ["bash", str(setup)],
         env=dict(os.environ, TEST_ROOT=str(tmp_path)),
         capture_output=True,

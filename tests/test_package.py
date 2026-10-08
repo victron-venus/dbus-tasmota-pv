@@ -5,7 +5,9 @@ import hashlib
 import json
 import os
 import runpy
-import subprocess
+
+# Reviewed test harness: fixed commands and isolated fixture paths; no shell interpolation.
+import subprocess  # nosec B404
 import sys
 import tarfile
 from pathlib import Path
@@ -15,7 +17,8 @@ def test_release_archive_contains_working_service_contract(tmp_path: Path) -> No
     """Build and unpack the actual release archive, including its launcher."""
     root = Path(__file__).resolve().parents[1]
     tag = (root / "version").read_text().strip()
-    subprocess.run(["bash", str(root / "scripts/build-package.sh"), tag, str(tmp_path)], check=True)
+    # Reviewed test harness: fixed commands and isolated fixture paths; no shell interpolation.
+    subprocess.run(["bash", str(root / "scripts/build-package.sh"), tag, str(tmp_path)], check=True)  # nosec B603, B607
     archive = tmp_path / f"dbus-tasmota-pv-{tag}.tar.gz"
     digest, filename = (tmp_path / "SHA256SUMS").read_text().split()
     assert filename == archive.name
@@ -46,9 +49,12 @@ def test_release_archive_contains_working_service_contract(tmp_path: Path) -> No
     assert os.access(run, os.X_OK)
     assert "exec python3 dbus-tasmota-pv.py\n" in run.read_text()
     assert (installed / "services/dbus-tasmota-pv/log/run").is_file()
-    subprocess.run(["bash", "-n", str(installed / "setup")], check=True)
-    subprocess.run(["sh", "-n", str(run)], check=True)
-    result = subprocess.run(
+    # Reviewed test harness: fixed commands and isolated fixture paths; no shell interpolation.
+    subprocess.run(["bash", "-n", str(installed / "setup")], check=True)  # nosec B603, B607
+    # Reviewed test harness: fixed commands and isolated fixture paths; no shell interpolation.
+    subprocess.run(["sh", "-n", str(run)], check=True)  # nosec B603, B607
+    # Reviewed test harness: fixed commands and isolated fixture paths; no shell interpolation.
+    result = subprocess.run(  # nosec B603
         [sys.executable, str(installed / "dbus-tasmota-pv.py"), "--help"],
         check=True,
         capture_output=True,
@@ -73,7 +79,8 @@ def test_hosted_release_archive_includes_settings_module(tmp_path: Path) -> None
     assert (installed / "tasmota_settings.py").read_bytes() == (
         root / "tasmota_settings.py"
     ).read_bytes()
-    result = subprocess.run(
+    # Reviewed test harness: fixed commands and isolated fixture paths; no shell interpolation.
+    result = subprocess.run(  # nosec B603
         [sys.executable, str(installed / "dbus-tasmota-pv.py"), "--help"],
         cwd=tmp_path,
         check=True,
