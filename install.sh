@@ -44,9 +44,10 @@ exec multilog t s25000 n4 /var/log/dbus-tasmota-pv
 EOF
 chmod +x "$staging/run" "$staging/log/run"
 stop_service() {
-    svc -d "$1" 2>/dev/null || true
+    stop_service_path=$1
+    svc -d "$stop_service_path" 2>/dev/null || true
     count=0
-    while svstat "$1" 2>/dev/null | grep -q ': up '; do
+    while svstat "$stop_service_path" 2>/dev/null | grep -q ': up '; do
         if [ "$count" -ge 15 ]; then
             echo 'Existing service did not stop; runtime files were not replaced.' >&2
             return 1
