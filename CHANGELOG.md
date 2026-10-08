@@ -5,7 +5,7 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [3.1.0] - Unreleased
+## [3.1.0] - Development line
 
 ### Fixed
 - Require live MQTT telemetry instead of reviving offline power from retained messages; invalidate on LWT Offline.
@@ -23,6 +23,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Batch D-Bus measurements into ItemsChanged signals using the existing GLib/velib runtime.
 - Synchronize candidate versions in the runtime, package metadata, lockfile, and SetupHelper tracking.
 - Missing AC current is now unknown rather than a derived estimate. Existing phase L1 / AC input 1 defaults remain; first migration prefers the previous instance when it is free.
+
+### Maintenance
+
+- Publish reviewed release notes from the exact source commit used to build each candidate, preserving build provenance.
+- Document contribution checks, confidential security reporting and the project-specific trust boundaries.
+- Require complete Bandit scans with no unresolved findings; reject malformed or incomplete scanner output. Document narrowly reviewed tooling and synthetic-fixture exceptions.
+
+### Upgrade
+
+Missing measured AC current now stays unknown rather than being estimated from Power/Voltage. Confirm the configured phase and AC position; instance migration prefers the previous free instance and preserves identity thereafter. Retain device-local settings and test MQTT availability behavior before commissioning.
+
+### Security
+
+Private vulnerability reporting and response policy are documented in SECURITY.md. This maintenance update strengthens release evidence and review instructions; it does not replace deployment authentication, network isolation or independent equipment safeguards. No new project CVE is announced by these changes.
 
 ## [3.0.2] - 2026-09-12
 
