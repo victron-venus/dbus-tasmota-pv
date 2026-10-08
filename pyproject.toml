@@ -9,7 +9,7 @@ requires-python = ">=3.12,<3.13"
 dependencies = ["paho-mqtt>=2.1.0"]
 
 [project.optional-dependencies]
-dev = ["pytest>=9.1.1", "pytest-cov>=7.1.0"]
+dev = ["pytest>=9.1.1", "pytest-cov>=7.1.0", "ruff>=0.16.10"]
 
 [tool.setuptools]
 py-modules = ["dbus-tasmota-pv", "tasmota_settings"]
@@ -44,3 +44,7 @@ ignore = [
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+
+# Install wheel-only build tools before building the local package without build isolation.
+[dependency-groups]
+build = ["build==1.6.1", "setuptools==84.0.0", "wheel==0.48.0"]
