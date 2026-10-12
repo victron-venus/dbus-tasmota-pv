@@ -5,6 +5,18 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.1.1] - Development line
+
+### Maintenance
+
+- Clarify telemetry validation, persistent device identity and installer cleanup while preserving the existing 3.1 metering behavior.
+- Require complete security scans and publish release notes from the exact reviewed source commit.
+- Interpret GitHub response status from authoritative HTTP headers during release publication and keep package, runtime and SetupHelper versions synchronized.
+
+### Upgrade
+
+No new configuration migration is introduced. Retain device-local settings and validate MQTT availability behavior before commissioning. Beta and RC artifacts use this new base version without reusing the existing 3.1.0 release tag; offline checks do not establish hardware acceptance.
+
 ## [3.1.0] - Development line
 
 ### Fixed
