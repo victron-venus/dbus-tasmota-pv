@@ -17,6 +17,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 No new configuration migration is introduced. Retain device-local settings and validate MQTT availability behavior before commissioning. Beta and RC artifacts use this new base version without reusing the existing 3.1.0 release tag; offline checks do not establish hardware acceptance.
 
+### Security
+
+Preserve broker authentication and access controls, and keep device credentials out of committed configuration and logs. The existing telemetry validation and offline invalidation remain in force; release verification requires complete security checks and source-bound notes.
+
 ## [3.1.0] - Development line
 
 ### Fixed
