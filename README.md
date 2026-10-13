@@ -1,5 +1,7 @@
 # dbus-tasmota-pv
 
+[![Fuzzing: RC only](https://img.shields.io/badge/Fuzzing-RC%20only-blue)](docs/fuzzing.md)
+
 [![CI](https://github.com/victron-venus/dbus-tasmota-pv/actions/workflows/ci.yml/badge.svg)](https://github.com/victron-venus/dbus-tasmota-pv/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Release](https://img.shields.io/github/v/release/victron-venus/dbus-tasmota-pv)](https://github.com/victron-venus/dbus-tasmota-pv/releases)
@@ -541,3 +543,9 @@ Tasmota settings can remain stored during rollback.
 See [CONTRIBUTING.md](CONTRIBUTING.md) for reports, development checks and pull requests,
 [SECURITY.md](SECURITY.md) for private vulnerability reporting and deployment trust boundaries,
 and the [OpenSSF evidence index](docs/openssf-evidence.md) for assessment references and remaining verification.
+
+## Release-candidate fuzzing
+
+The production bounded Tasmota ENERGY payload parser receives synthetic JSON bytes. Every accepted measurement must be finite or explicitly unknown. The import-safe module is instrumented without constructing an inverter or MQTT listener.
+
+[RC-only fuzzing policy, local reproduction and failure handling](docs/fuzzing.md).

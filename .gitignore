@@ -22,3 +22,9 @@ release-assets/
 
 # Local Python build metadata
 *.egg-info/
+
+# Isolated RC fuzz runtime and local diagnostic inputs
+.fuzz-venv/
+crash-*
+timeout-*
+oom-*
