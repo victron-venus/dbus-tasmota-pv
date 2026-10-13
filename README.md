@@ -1,5 +1,8 @@
 # dbus-tasmota-pv
 
+[![OpenSSF Best Practices](https://www.bestpractices.dev/projects/15455/badge)](https://www.bestpractices.dev/projects/15455)
+
+
 [![CI](https://github.com/victron-venus/dbus-tasmota-pv/actions/workflows/ci.yml/badge.svg)](https://github.com/victron-venus/dbus-tasmota-pv/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Release](https://img.shields.io/github/v/release/victron-venus/dbus-tasmota-pv)](https://github.com/victron-venus/dbus-tasmota-pv/releases)
@@ -541,3 +544,7 @@ Tasmota settings can remain stored during rollback.
 See [CONTRIBUTING.md](CONTRIBUTING.md) for reports, development checks and pull requests,
 [SECURITY.md](SECURITY.md) for private vulnerability reporting and deployment trust boundaries,
 and the [OpenSSF evidence index](docs/openssf-evidence.md) for assessment references and remaining verification.
+
+## Project maintenance
+
+[Governance and continuity](GOVERNANCE.md), [code of conduct](CODE_OF_CONDUCT.md), [roadmap](ROADMAP.md), [security assurance](docs/security-assurance.md) and [quality evidence](docs/quality-and-build.md) describe the current process and its limitations. The dynamic OpenSSF badge links to the live self-assessment; repository documents do not award a badge.

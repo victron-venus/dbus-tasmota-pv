@@ -1,0 +1,104 @@
+{
+  "schema": 1,
+  "repository": "victron-venus/dbus-tasmota-pv",
+  "reviewed_at": "2026-10-13",
+  "runtime_source_sha": "fdc08c4683f75b4795822ed2267d2ef8edf2aedb",
+  "environment": {
+    "platform": "macOS ARM64",
+    "python": "3.12.13",
+    "dependency_install": "uv sync --locked (build group, then dev extra without isolated build)"
+  },
+  "pytest": {
+    "passed": 151,
+    "skipped": 2,
+    "command": "python -m pytest --cov=. --cov-report=json --cov-fail-under=60",
+    "scope": "hardware-free fixtures; normal assertions enabled",
+    "skip_reason": "Real Bandit discovery tests need separate pinned scanner environment; both passed in that environment."
+  },
+  "runtime_statement_coverage": {
+    "covered": 424,
+    "total": 479,
+    "percent": 88.51774530271399,
+    "files": {
+      "dbus-tasmota-pv.py": {
+        "covered_lines": 335,
+        "num_statements": 386,
+        "percent_covered": 86.78756476683938,
+        "percent_covered_display": "87",
+        "missing_lines": 51,
+        "excluded_lines": 0,
+        "percent_statements_covered": 86.78756476683938,
+        "percent_statements_covered_display": "87"
+      },
+      "tasmota_settings.py": {
+        "covered_lines": 89,
+        "num_statements": 93,
+        "percent_covered": 95.6989247311828,
+        "percent_covered_display": "96",
+        "missing_lines": 4,
+        "excluded_lines": 0,
+        "percent_statements_covered": 95.6989247311828,
+        "percent_statements_covered_display": "96"
+      }
+    },
+    "whole_project_coverage_claim": false,
+    "limitations": "Excludes tests from the numerator/denominator. Does not measure every delivery helper, shell/native dependency or optional component. EV vendor code, HA integration and Go code are not included in this Python runtime subtotal."
+  },
+  "release_contract_tests": {
+    "passed": 342,
+    "command": "python -m unittest discover -s .github/release-tests -q"
+  },
+  "ruff": {
+    "lint": "passed",
+    "format": "passed"
+  },
+  "wheel_build": {
+    "command": "python -m build --no-isolation --wheel",
+    "result": "passed",
+    "scope": "local package construction only; not native/device acceptance"
+  },
+  "github": {
+    "private_vulnerability_reporting": true,
+    "open_dependabot_alerts": 0,
+    "open_secret_scanning_alerts": 0,
+    "open_code_scanning_alerts": [
+      {
+        "number": 4,
+        "rule": "FuzzingID",
+        "tool": "Scorecard",
+        "url": "https://github.com/victron-venus/dbus-tasmota-pv/security/code-scanning/4"
+      },
+      {
+        "number": 2,
+        "rule": "CIIBestPracticesID",
+        "tool": "Scorecard",
+        "url": "https://github.com/victron-venus/dbus-tasmota-pv/security/code-scanning/2"
+      },
+      {
+        "number": 1,
+        "rule": "BranchProtectionID",
+        "tool": "Scorecard",
+        "url": "https://github.com/victron-venus/dbus-tasmota-pv/security/code-scanning/1"
+      }
+    ],
+    "public_security_advisories": 0,
+    "release_bodies_reviewed": 72,
+    "ordinary_issues_reviewed": 0
+  },
+  "bandit": {
+    "version": "1.9.4",
+    "source_lines": 15269,
+    "errors": [],
+    "findings": []
+  },
+  "owner_attestations": {
+    "secure_design_and_common_vulnerability_knowledge": true,
+    "external_bug_enhancement_vulnerability_reports_last_12_months": false,
+    "access_continuity": false
+  },
+  "limitations": [
+    "No production device, broker, vehicle/account or actuator was used.",
+    "No new stable release or signature claim.",
+    "No real access-continuity arrangement exists."
+  ]
+}
