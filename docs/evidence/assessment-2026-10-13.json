@@ -42,7 +42,7 @@
       }
     },
     "whole_project_coverage_claim": false,
-    "limitations": "Excludes tests from the numerator/denominator. Does not measure every delivery helper, shell/native dependency or optional component. EV vendor code, HA integration and Go code are not included in this Python runtime subtotal."
+    "limitations": "Excludes tests from the numerator/denominator. Does not measure every delivery helper, shell code or native dependency. This subtotal covers only the two listed runtime modules."
   },
   "release_contract_tests": {
     "passed": 342,
