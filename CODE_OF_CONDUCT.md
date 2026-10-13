@@ -39,3 +39,7 @@ appropriate to the circumstances.
 This Code of Conduct is adapted from the [Contributor Covenant](https://www.contributor-covenant.org),
 version 2.0, available at
 https://www.contributor-covenant.org/version/2/0/code_of_conduct.html.
+
+## Reporting route and responsibility
+
+The primary maintainer identified in [GOVERNANCE.md](GOVERNANCE.md) handles reports. Request confidential contact through the maintainer's [GitHub profile](https://github.com/4alvit), or open an issue asking for private contact without publishing incident details or personal information. Maintainers may remove abusive content or restrict participation proportionately and should explain decisions when privacy permits. A reporter may request reconsideration with new evidence. Enforcement currently depends on the sole maintainer; this is not an independent appeals panel.

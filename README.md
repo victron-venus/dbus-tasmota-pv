@@ -2,6 +2,9 @@
 
 [![Fuzzing: RC only](https://img.shields.io/badge/Fuzzing-RC%20only-blue)](docs/fuzzing.md)
 
+[![OpenSSF Best Practices](https://www.bestpractices.dev/projects/15455/badge)](https://www.bestpractices.dev/projects/15455)
+
+
 [![CI](https://github.com/victron-venus/dbus-tasmota-pv/actions/workflows/ci.yml/badge.svg)](https://github.com/victron-venus/dbus-tasmota-pv/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Release](https://img.shields.io/github/v/release/victron-venus/dbus-tasmota-pv)](https://github.com/victron-venus/dbus-tasmota-pv/releases)
@@ -549,3 +552,7 @@ and the [OpenSSF evidence index](docs/openssf-evidence.md) for assessment refere
 The production bounded Tasmota ENERGY payload parser receives synthetic JSON bytes. Every accepted measurement must be finite or explicitly unknown. The import-safe module is instrumented without constructing an inverter or MQTT listener.
 
 [RC-only fuzzing policy, local reproduction and failure handling](docs/fuzzing.md).
+
+## Project maintenance
+
+[Governance and continuity](GOVERNANCE.md), [code of conduct](CODE_OF_CONDUCT.md), [roadmap](ROADMAP.md), [security assurance](docs/security-assurance.md) and [quality evidence](docs/quality-and-build.md) describe the current process and its limitations. The dynamic OpenSSF badge links to the live self-assessment; repository documents do not award a badge.
