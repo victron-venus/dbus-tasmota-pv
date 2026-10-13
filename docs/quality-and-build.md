@@ -20,6 +20,6 @@ Source and release downloads use GitHub HTTPS. Existing release assets include S
 
 ## Review limits and next work
 
-The public GitHub review found enabled private vulnerability reporting and no open Dependabot or secret alerts. Code-scanning observations are listed individually in the receipt. Release bodies are present; older retrospective release notes still require the separate release-note quality review before claiming complete coverage. No public project vulnerability advisory or ordinary issue was found, and the owner reported no external reports in the preceding twelve months.
+The public GitHub review found enabled private vulnerability reporting and no open Dependabot or secret alerts. Code-scanning observations are listed individually in the receipt. The historical release-note review confirmed source-based human-readable change summaries and upgrade guidance; older notes are explicitly labelled retrospective. No public project vulnerability advisory or ordinary issue was found, and the owner reported no external reports in the preceding twelve months.
 
 The Markdown uses headings and descriptive links, but this review is not an accessibility certification or a tested translation system. Full release reproducibility, cryptographic signing, comprehensive coverage, optional-runtime accessibility and actual [access continuity](../GOVERNANCE.md) remain work in [the roadmap](../ROADMAP.md). Unsupported criteria must stay unmet in the public assessment.
