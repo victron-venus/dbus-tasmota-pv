@@ -1,11 +1,12 @@
 """Verify production-loader routing separately from native engine coverage."""
 
-import subprocess
+# Fixed local child programs keep production imports isolated from pytest state.
+import subprocess  # nosec B404
 import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
-PROBE = r'''
+PROBE = r"""
 import contextlib
 import importlib.abc
 import runpy
@@ -55,11 +56,11 @@ else:
     assert Path(parser.__code__.co_filename).resolve() == root / "dbus-tasmota-pv.py"
     for seed in (root / "fuzz/corpus/energy").iterdir():
         harness["test_one_input"](seed.read_bytes())
-'''
+"""
 
 
 def test_production_parser_uses_import_hook():
-    subprocess.run(
+    subprocess.run(  # nosec B603 - fixed local probe, interpreter and arguments
         [sys.executable, "-c", PROBE, str(ROOT), "enabled"],
         check=True,
         capture_output=True,
@@ -69,7 +70,7 @@ def test_production_parser_uses_import_hook():
 
 
 def test_missing_production_instrumentation_fails_before_campaign():
-    subprocess.run(
+    subprocess.run(  # nosec B603 - fixed local probe, interpreter and arguments
         [sys.executable, "-c", PROBE, str(ROOT), "disabled"],
         check=True,
         capture_output=True,

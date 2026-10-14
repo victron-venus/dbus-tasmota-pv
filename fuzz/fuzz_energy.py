@@ -23,7 +23,10 @@ for function_name in ("parse_energy_payload", "_parse_energy_payload", "_energy_
     atheris.instrument_func(function)
     if function.__code__ is not imported_code:
         raise RuntimeError(f"Production parser was not instrumented during import: {function_name}")
-print("Atheris production instrumentation verified: dbus-tasmota-pv.py (3 parser functions)", file=sys.stderr)
+print(
+    "Atheris production instrumentation verified: dbus-tasmota-pv.py (3 parser functions)",
+    file=sys.stderr,
+)
 
 
 def test_one_input(data: bytes) -> None:
