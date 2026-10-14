@@ -29,7 +29,25 @@
         "-max_len=4096"
       ],
       "seconds": 60,
-      "corpus": "fuzz/corpus/energy"
+      "corpus": "fuzz/corpus/energy",
+      "instrumentation": [
+        {
+          "module": "dbus-tasmota-pv",
+          "functions": [
+            "parse_energy_payload",
+            "_parse_energy_payload",
+            "_energy_reading"
+          ]
+        }
+      ]
     }
+  ],
+  "preflight-paths": [
+    ".github/requirements-fuzz.in",
+    "dbus-tasmota-pv.py",
+    "fuzz",
+    "pyproject.toml",
+    "tasmota_settings.py",
+    "uv.lock"
   ]
 }
