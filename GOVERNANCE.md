@@ -10,7 +10,7 @@ The release maintainer checks reviewed source, validation, release notes and acc
 
 [4alvit](https://github.com/4alvit) is the current primary maintainer and administrator (administrative permission verified 2026-10-13), responsible for scope, final decisions, releases and security reports. These responsibilities do not imply an independent second maintainer.
 
-Discuss changes to public interfaces, dependencies, supported platforms or security assumptions in an issue or pull request. Describe alternatives, compatibility and migration consequences. Maintainers should record a reasoned decision publicly; contributors may request reconsideration with new evidence. Confidential reports follow [SECURITY.md](SECURITY.md). Participation follows [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md).
+Discuss changes to public interfaces, dependencies, supported platforms or security assumptions in an issue or pull request. Describe alternatives, compatibility and migration consequences. Maintainers should record a reasoned decision publicly; contributors may request reconsideration with new evidence. Confidential vulnerability reports follow [SECURITY.md](SECURITY.md). Participation and confidential conduct reports follow [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md).
 
 ## Continuity remains open
 
