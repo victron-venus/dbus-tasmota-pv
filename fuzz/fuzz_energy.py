@@ -1,3 +1,4 @@
+import importlib
 import math
 import sys
 from pathlib import Path
@@ -5,17 +6,24 @@ from pathlib import Path
 import atheris
 
 ROOT = Path(__file__).resolve().parents[1]
-import importlib.util
 
 sys.path.insert(0, str(ROOT))
-spec = importlib.util.spec_from_file_location("fuzz_tasmota_runtime", ROOT / "dbus-tasmota-pv.py")
-runtime = importlib.util.module_from_spec(spec)
-sys.modules[spec.name] = runtime
 with atheris.instrument_imports():
-    spec.loader.exec_module(runtime)
+    # Normal import machinery lets Atheris replace the production module loader.
+    # Calling a pre-created SourceFileLoader directly bypasses its import hook.
+    runtime = importlib.import_module("dbus-tasmota-pv")
 
-with atheris.instrument_imports():
-    from fuzz_tasmota_runtime import parse_energy_payload
+parse_energy_payload = runtime.parse_energy_payload
+
+for function_name in ("parse_energy_payload", "_parse_energy_payload", "_energy_reading"):
+    function = getattr(runtime, function_name)
+    imported_code = function.__code__
+    # The locked Atheris version leaves already-instrumented code unchanged.
+    # Fail before fuzzing if the production parser did not pass its import hook.
+    atheris.instrument_func(function)
+    if function.__code__ is not imported_code:
+        raise RuntimeError(f"Production parser was not instrumented during import: {function_name}")
+print("Atheris production instrumentation verified: dbus-tasmota-pv.py (3 parser functions)", file=sys.stderr)
 
 
 def test_one_input(data: bytes) -> None:

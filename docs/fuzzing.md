@@ -10,6 +10,15 @@ only a standard-library JSON decoder. Expected validation rejections are handled
 at their documented boundary; assertion failures and unexpected exceptions fail
 the run. Seeds contain no credentials, device identities or captured user data.
 
+The service module is loaded through normal import machinery while the Atheris
+import hook is active. Calling a pre-created loader's `exec_module()` directly
+would execute the parser but bypass its coverage instrumentation. Startup checks
+all three parser functions using the locked engine's idempotent
+`instrument_func()` API and fails if any function needed instrumentation after
+import. The campaign log confirms this check before accepting inputs. Local
+import-hook regression tests verify routing and failure behavior; they do not
+replace the real Atheris check in the Linux RC campaign.
+
 ## When it runs and what it costs
 
 The canonical release pipeline calls the reusable fuzz workflow in
