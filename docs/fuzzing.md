@@ -1,5 +1,9 @@
 # Release-candidate fuzz testing
 
+See the [illustrated RC fuzzing process and verified rollout results](https://github.com/victron-venus/venus-os-ci-toolkit/blob/main/docs/rc-fuzzing-results.md)
+for the shared release flow, evidence requirements and a dated cross-project
+snapshot. The project-specific scope and reproduction guidance below still apply.
+
 ## Scope and assertions
 
 **energy.** The production bounded Tasmota ENERGY payload parser receives synthetic JSON bytes. Every accepted measurement must be finite or explicitly unknown. The import-safe module is instrumented without constructing an inverter or MQTT listener.
