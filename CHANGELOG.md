@@ -5,6 +5,20 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.1.3] - 2026-10-17
+
+### Changed
+
+- Link the maintained source-bound RC fuzzing process and verified results.
+
+### Upgrade
+
+Use the existing installation procedure and preserve local configuration. This documentation maintenance release leaves runtime behavior and configuration unchanged.
+
+### Security
+
+No new runtime vulnerability fix or target-device acceptance is claimed. Existing release, integration and device validation remain required.
+
 ## [3.1.2] - 2026-10-14
 
 ### Changed
