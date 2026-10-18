@@ -51,7 +51,7 @@ wheels = [
 
 [[package]]
 name = "dbus-tasmota-pv"
-version = "3.1.3"
+version = "3.1.4"
 source = { editable = "." }
 dependencies = [
     { name = "paho-mqtt" },
