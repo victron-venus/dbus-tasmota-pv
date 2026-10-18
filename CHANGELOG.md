@@ -5,6 +5,20 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.1.4] - 2026-10-18
+
+### Changed
+
+- Refresh pinned shared CI workflows and their source-bound release validation.
+
+### Upgrade
+
+Use the documented upgrade procedure and preserve local configuration and data. No configuration migration is required. Keep the previous immutable release available for rollback.
+
+### Security
+
+This maintenance release preserves the existing security and release-validation requirements. Publication does not deploy the service or establish physical-device acceptance.
+
 ## [3.1.3] - 2026-10-17
 
 ### Changed
