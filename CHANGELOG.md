@@ -5,6 +5,26 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.1.5] - Unreleased
+
+### Changed
+
+- Update Ruff to 0.17.1 with a matching dependency lock.
+- Use native uv dependency updates and the committed lock for local validation.
+- Refresh pinned shared CI workflows while retaining source-bound RC fuzzing.
+
+### Upgrade
+
+Use the existing upgrade procedure and preserve configuration and data. This
+maintenance release does not change the MQTT protocol or require a migration.
+
+### Security
+
+Keep the MQTT broker access-controlled and restrict telemetry publication to
+trusted producers. The development-tool and CI updates do not change network
+authentication or transport protection. Existing security checks remain
+required before publication.
+
 ## [3.1.4] - 2026-10-18
 
 ### Changed
