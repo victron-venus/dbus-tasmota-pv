@@ -18,6 +18,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 Use the existing upgrade procedure and preserve configuration and data. This
 maintenance release does not change the MQTT protocol or require a migration.
 
+### Security
+
+Keep the MQTT broker access-controlled and restrict telemetry publication to
+trusted producers. The development-tool and CI updates do not change network
+authentication or transport protection. Existing security checks remain
+required before publication.
+
 ## [3.1.4] - 2026-10-18
 
 ### Changed
