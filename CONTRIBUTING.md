@@ -19,6 +19,16 @@ Contributions must be compatible with [LICENSE](LICENSE). Preserve third-party c
 
 ## Local validation
 
+### Dependency updates
+
+Dependabot uses the [`uv` ecosystem](https://docs.github.com/en/code-security/reference/supply-chain-security/supported-ecosystems-and-repositories)
+so an update includes both `pyproject.toml` and `uv.lock`. Keep those files in the
+same pull request. For a manual update, change the intended constraint and run
+`uv lock --python 3.12.13 --upgrade-package PACKAGE==VERSION`; inspect the diff
+for unrelated upgrades. Run `uv lock --check --python 3.12.13` before the local
+validation below. Installation uses `--locked` and must fail if the manifest and
+lock disagree; CI does not rewrite the lock.
+
 Install local test dependencies with `bash scripts/ci.sh --install`, then run `bash scripts/ci.sh`. The script is the authoritative local entry point for the checks and tool versions; inspect it and the checked-in dependency manifests before installing prerequisites. Use an isolated development environment.
 
 For the shared Python checks, use uv 0.12.18 and the checked-in lock without resolving newer packages:
