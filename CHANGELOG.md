@@ -5,6 +5,28 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.1.6] - Unreleased
+
+### Changed
+
+- Update the packaging toolchain to setuptools 84.2.1 and the development linter to Ruff 0.17.2, with matching locked dependencies.
+- Refresh pinned shared CI workflows and keep the workflow, runtime, and policy references for RC evidence aligned.
+- Preserve release publication across transient GitHub metadata delays and upload assets to the already verified release ID.
+
+### Upgrade
+
+Use the existing installation procedure, preserve local configuration, and keep
+an accepted package available for rollback. This maintenance release changes
+build and release tooling; the application logic, MQTT protocol, and paho-mqtt
+runtime dependency remain unchanged. Device acceptance remains a separate step.
+
+### Security
+
+The packaging update raises the setuptools requirement to 84.2.1. This is a
+build-tool dependency fix, not a change to runtime authentication or transport.
+Keep broker access restricted to trusted producers. Required checks and
+source-bound release validation remain enabled.
+
 ## [3.1.5] - Unreleased
 
 ### Changed
