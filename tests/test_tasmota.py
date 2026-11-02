@@ -46,8 +46,6 @@ _spec.loader.exec_module(_mod)
 # Patch Venus OS symbols that were set to None during module load
 _mod.dbus = MagicMock()
 _mod.VeDbusService = MagicMock()
-_mod.GLib = MagicMock()
-_mod.GLib.idle_add.side_effect = lambda callback, *args: callback(*args)
 
 
 class MemorySettings:
@@ -79,6 +77,10 @@ class MemorySettings:
 @pytest.fixture(autouse=True)
 def runtime_dependencies(monkeypatch):
     monkeypatch.setattr(_mod, "TasmotaSettings", MemorySettings)
+    # Each test owns its scheduler. Patching a dynamically created MagicMock
+    # child must not delete or replace the scheduler used by later tests.
+    glib = MagicMock(idle_add=MagicMock(side_effect=lambda callback, *args: callback(*args)))
+    monkeypatch.setattr(_mod, "GLib", glib)
 
     def service(*_args, **_kwargs):
         result = MagicMock()
@@ -271,9 +273,11 @@ class TestInverterFreshness:
         inv = _make_inverter()
         inv._last_update = time() - (_mod.STALE_AFTER_SECONDS + 10)
         inv.check_stale()
-        calls_after_first = mock_glib_idle_add_calls(inv)
+        writes = inv._dbusservice.__setitem__
+        writes.assert_any_call("/Connected", 0)
+        calls_after_first = writes.call_count
         inv.check_stale()
-        assert mock_glib_idle_add_calls(inv) == calls_after_first  # no new path writes
+        assert writes.call_count == calls_after_first
 
     def test_back_online_after_stale(self) -> None:
         inv = _make_inverter()
@@ -282,11 +286,6 @@ class TestInverterFreshness:
         assert inv._connected is False
         inv.apply(power=10.0, voltage=230.0, current=0.04, total=1.0, today=0.1, yesterday=0.5)
         assert inv._connected is True
-
-
-def mock_glib_idle_add_calls(inv: TasmotaPVInverter) -> int:
-    """Count GLib.idle_add invocations recorded on the shared mock."""
-    return mock_glib.GLib.idle_add.call_count
 
 
 # ===================================================================
