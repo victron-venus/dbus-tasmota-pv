@@ -547,6 +547,8 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) for reports, development checks and pull 
 [SECURITY.md](SECURITY.md) for private vulnerability reporting and deployment trust boundaries,
 and the [OpenSSF evidence index](docs/openssf-evidence.md) for assessment references and remaining verification.
 
+Docs index: [docs/README.md](docs/README.md).
+
 ## Release-candidate fuzzing
 
 The production bounded Tasmota ENERGY payload parser receives synthetic JSON bytes. Every accepted measurement must be finite or explicitly unknown. The import-safe module is instrumented without constructing an inverter or MQTT listener.
