@@ -1,12 +1,40 @@
 # Changelog
 
+## [3.1.7] - Unreleased
+
+### Changed
+
+- keep local instruction files out of git.
+- add a navigation index for docs/.
+- add line-ending and language attributes.
+- preserve merge identity and withdrawn auto-merge requests (#183).
+- validate the toolkit before scope regeneration (#177).
+- limit documentation pull requests to relevant checks (#176).
+- enable native compiled dependency updates.
+- Migrate dependency updates to Renovate (#174).
+- recheck automatic publication source (#172).
+- reconcile lost creation responses (#171).
+
+### Upgrade
+
+Use the existing installation procedure, preserve local configuration, and keep
+an accepted package available for rollback. This maintenance release changes
+build and release tooling; the application logic, MQTT protocol, and paho-mqtt
+runtime dependency remain unchanged. Device acceptance remains a separate step.
+
+### Security
+
+The packaging update raises the setuptools requirement to 84.2.1. This is a
+build-tool dependency fix, not a change to runtime authentication or transport.
+Keep broker access restricted to trusted producers. Required checks and
+source-bound release validation remain enabled.
+
 All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [3.1.6] - Unreleased
-
+## [3.1.6] - 2026-11-02
 ### Changed
 
 - Update the packaging toolchain to setuptools 84.2.1 and the development linter to Ruff 0.17.2, with matching locked dependencies.
